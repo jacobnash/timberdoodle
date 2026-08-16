@@ -1,0 +1,60 @@
+# Marker-tag SET (subset match, most-specific wins - see mapping.classify_point)
+# -> real Brick class. Tag sets come from HAYSTACK:hasTag triples.
+#
+# Every tag name here is a real Haystack v4 marker, verified against
+# https://github.com/Project-Haystack/haystack-defs (not guessed):
+#   - pointFunction: sensor, cmd, sp (phIoT/lib/point.trio) - a point has
+#     exactly one of these.
+#   - domain markers: zone, fan, run, damper, valve (phIoT/lib/misc.trio,
+#     actuator.trio); air, co2, humidity (phScience/lib/air.trio); temp
+#     (phScience/lib/quantity.trio); discharge, return, mixed, outside
+#     (phIoT/lib/conduit.trio - note v4 uses "discharge", not "supply",
+#     for the AHU/VAV outlet concept); elec, demand, energy
+#     (phIoT/lib/elec.trio, phIoT/lib/meter.trio - real point tag sets
+#     verified against ac-elec-meter's own children in meter.trio, e.g.
+#     `{total ac elec demand sensor point}`).
+#
+# Every brick_class here is a real, existing class in the Brick ontology,
+# verified against the real ontology (see tests/fixtures/brick_subset.ttl,
+# a vendored excerpt of exactly these classes plus their real ancestor
+# chains) - not an invented name. Two verification traps found and avoided
+# while building this list:
+#   - Brick's OWN "hasAssociatedTag" annotations use spelled-out words
+#     ("Temperature", "Command") that do NOT match real Haystack marker
+#     spelling ("temp", "cmd") - so rules are hand-verified against the
+#     real Haystack defs, never auto-derived from Brick's tag vocabulary.
+#   - The obvious guess "Zone_Air_CO2_Sensor" doesn't exist; the real class
+#     is "Zone_CO2_Level_Sensor".
+rules:
+  - tags: [zone, air, temp, sensor]
+    brick_class: Zone_Air_Temperature_Sensor
+  - tags: [fan, run, sensor]
+    brick_class: Fan_Status
+  - tags: [discharge, air, temp, sensor]
+    brick_class: Discharge_Air_Temperature_Sensor  # verified: real example in docHaystack/doc/Points.fandoc
+  - tags: [return, air, temp, sensor]
+    brick_class: Return_Air_Temperature_Sensor
+  - tags: [mixed, air, temp, sensor]
+    brick_class: Mixed_Air_Temperature_Sensor
+  - tags: [outside, air, temp, sensor]
+    brick_class: Outside_Air_Temperature_Sensor
+  - tags: [zone, air, temp, sp]
+    brick_class: Zone_Air_Temperature_Setpoint  # verified: real example in docHaystack/doc/Points.fandoc
+  - tags: [zone, air, humidity, sensor]
+    brick_class: Zone_Air_Humidity_Sensor
+  - tags: [zone, co2, sensor]
+    brick_class: Zone_CO2_Level_Sensor
+  - tags: [fan, cmd]
+    brick_class: Fan_Command
+  - tags: [damper, cmd]
+    brick_class: Damper_Position_Command  # "position" is a Brick label word, not a Haystack marker - confirmed absent from every real defs file
+  - tags: [damper, sensor]
+    brick_class: Damper_Position_Sensor
+  - tags: [valve, cmd]
+    brick_class: Valve_Position_Command
+  - tags: [valve, sensor]
+    brick_class: Valve_Position_Sensor
+  - tags: [elec, demand, sensor]
+    brick_class: Electric_Power_Sensor  # verified: brickschema.org/schema/Brick.ttl, subClassOf Power_Sensor
+  - tags: [elec, energy, sensor]
+    brick_class: Electric_Energy_Sensor  # verified: brickschema.org/schema/Brick.ttl, subClassOf Energy_Sensor

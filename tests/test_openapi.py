@@ -1,0 +1,126 @@
+"""
+Two layers, both required for "the docs are actually true": (1) the spec
+itself is well-formed OpenAPI, (2) real live requests against the real
+running API actually produce responses matching what the spec documents.
+Writing an accurate-looking YAML file proves nothing on its own - only a
+real request/response round trip does.
+"""
+
+import time
+from http.server import ThreadingHTTPServer
+from threading import Thread
+
+import jsonschema
+import pytest
+import requests
+import yaml
+from openapi_spec_validator import validate
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
+
+from timberdoodle.ingest_api import OPENAPI_SPEC_PATH, make_handler
+from timberdoodle.remote_store import RemoteStore
+from timberdoodle.timeseries import connect_pool
+
+
+@pytest.fixture(scope="module")
+def spec() -> dict:
+    with open(OPENAPI_SPEC_PATH) as f:
+        return yaml.safe_load(f)
+
+
+def test_spec_is_well_formed_openapi(spec):
+    validate(spec)  # raises on any real structural problem
+
+
+@pytest.fixture
+def live_server():
+    store = RemoteStore()
+    ts_pool = connect_pool()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store, ts_pool))
+    server.daemon_threads = True
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    yield base_url
+    server.shutdown()
+    ts_pool.close()
+
+
+def _schema_for(spec: dict, status: str, path: str = "/ingest", method: str = "post") -> dict:
+    response = spec["paths"][path][method]["responses"][status]
+    return response["content"]["application/json"]["schema"]
+
+
+def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
+    """Schemas here use $ref (e.g. '#/components/schemas/Error') that only
+    resolves relative to the full spec document - a bare
+    jsonschema.validate(instance, {"$ref": ...}) can't find it on its own,
+    it needs a registry rooted at the whole spec, addressed by a URI the
+    $ref gets resolved against."""
+    resource = Resource.from_contents(spec, default_specification=DRAFT202012)
+    registry = Registry().with_resource(uri="spec", resource=resource)
+    if "$ref" in schema and schema["$ref"].startswith("#"):
+        schema = {"$ref": f"spec{schema['$ref']}"}
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator_cls(schema, registry=registry).validate(instance)
+
+
+@pytest.mark.integration
+def test_get_openapi_yaml_serves_the_real_spec_file(live_server):
+    resp = requests.get(f"{live_server}/openapi.yaml")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"] == "application/yaml"
+    served = yaml.safe_load(resp.text)
+    assert served["info"]["title"] == "Timberdoodle Ingest API"
+
+
+@pytest.mark.integration
+def test_post_ingest_single_reading_matches_documented_204(live_server, spec):
+    topic = f"test-openapi:single:{int(time.time())}"
+    resp = requests.post(f"{live_server}/ingest", json={"point": topic, "value": 71.0})
+
+    assert resp.status_code == 204
+    assert resp.content == b""  # spec documents no response body on 204
+
+
+@pytest.mark.integration
+def test_post_ingest_batch_matches_documented_204(live_server):
+    ts = int(time.time())
+    resp = requests.post(
+        f"{live_server}/ingest",
+        json=[
+            {"point": f"test-openapi:batch-a:{ts}", "value": 1.0},
+            {"point": f"test-openapi:batch-b:{ts}", "value": "active"},
+        ],
+    )
+    assert resp.status_code == 204
+
+
+@pytest.mark.integration
+def test_post_ingest_malformed_json_matches_documented_400_schema(live_server, spec):
+    resp = requests.post(
+        f"{live_server}/ingest",
+        data=b"not json",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    _assert_matches_schema(body, _schema_for(spec, "400"), spec)
+    assert "error" in body
+
+
+@pytest.mark.integration
+def test_post_ingest_missing_point_field_matches_documented_400_schema(live_server, spec):
+    resp = requests.post(f"{live_server}/ingest", json={"value": 71.0})  # no "point"
+
+    assert resp.status_code == 400
+    body = resp.json()
+    _assert_matches_schema(body, _schema_for(spec, "400"), spec)
+
+
+@pytest.mark.integration
+def test_unknown_path_matches_documented_404(live_server):
+    resp = requests.get(f"{live_server}/does-not-exist")
+    assert resp.status_code == 404

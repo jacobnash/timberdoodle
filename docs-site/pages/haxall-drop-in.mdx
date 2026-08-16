@@ -1,0 +1,88 @@
+---
+title: Haxall Drop-In
+---
+
+Timberdoodle can be the actual point-history backend behind a real Haxall
+project — not a mirror, not a comparison, the real thing. Haxall's UI,
+Axon, and rules keep working completely unchanged; `hisWrite`/`hisRead`
+just land in Timberdoodle's Postgres/Timescale store instead of Folio.
+
+This works because Haxall exposes a real, intentional extension point for
+exactly this: `hx::IHisExt`. A small Fantom library
+(`~/timberdoodle/fantom-his-ext/`) implements it and forwards reads/writes
+to this API's [`/history` endpoints](/api/ingest) over plain HTTP.
+
+Proven live, twice, against two independent real Haxall 4.0.6 instances —
+`hisWrite` through Axon lands in Timberdoodle's Postgres (confirmed via
+this API's own `GET /history`), and `hisRead` reads it back correctly.
+
+## The real extension point
+
+```fantom
+// hx.pod, src/core/hx/fan/IExts.fan
+const mixin IHisExt : Ext {
+  abstract Void read(Dict pt, Span? span, Dict? opts, |HisItem| f)
+  abstract Future write(Dict pt, HisItem[] items, Dict? opts := null)
+}
+```
+
+`TimberdoodleHisExt` implements this exactly like Haxall's own default
+(`hxd::HxdHisExt`, which just wraps `rt.db.his`) — same two methods, HTTP
+calls to `/ingest` and `/history` instead.
+
+## A real, load-bearing naming trick
+
+Haxall's built-in historian (`hx.hxd.his`) is a **boot lib** — it cannot
+be removed via `libRemove` (`hx::CannotRemoveBootLibErr`, confirmed live).
+With two libraries both implementing `IHisExt`, Haxall's lookup
+(`RuntimeExts.getByType`) picks whichever one sorts **first
+alphabetically by name**. That's why this library is registered as `his`,
+not a more properly-namespaced `td.his` — `"his" < "hx.hxd.his"` wins the
+tie-break. This is a real workaround for a real gap (Haxall has no
+supported way to explicitly select which `IHisExt` should be active when
+more than one is enabled), not a stylistic choice. If Haxall ever adds an
+explicit override mechanism, prefer that instead.
+
+## Enabling it
+
+```axon
+libAdd(["his"])
+```
+
+That's it — no `libRemove` needed or possible for the boot lib; adding
+`his` is enough for it to win going forward. The extension needs to reach
+this API at `http://host.docker.internal:8000/` from inside the Haxall
+container (or wherever it's configured — see `TimberdoodleHisExt.fan`).
+
+**This URL is currently stale.** `ingest_api.py` is now one of six
+daemons behind the [gateway](/architecture#the-gateway) and no longer
+publishes port 8000 to the host directly, so `host.docker.internal:8000`
+will refuse the connection. Until `TimberdoodleHisExt.fan` is updated,
+either point it at the gateway instead
+(`http://host.docker.internal:8080/ingest/`, adding an HTTP basic-auth
+header from `gateway/write.htpasswd` — `hisWrite` calls `POST /ingest`,
+a mutating call) or, for a Haxall integration you consider fully trusted,
+add a host port mapping back onto `ingest_api` in `docker-compose.yml`
+and accept that it bypasses the gateway's auth. Neither is done for you
+yet — pick the one that matches how trusted this particular Haxall
+instance is.
+
+## Known limitations
+
+- **`NA` (Not Available)** — a real, storable Haystack value distinct
+  from `null` — has no equivalent in this API's plain JSON value union
+  (number/string/boolean/null). Collapsed to `null` on write, mapped back
+  to `NA` on read. Round-trips cleanly for values this extension itself
+  wrote; a value that was genuinely `null` from some other source would
+  come back as `NA` instead.
+- **Batching is per-point, not cross-point** — Haxall calls `write()`
+  once per point per collection cycle with a batch of items for *that*
+  point, never a multi-point batch in one call. This API's `/ingest`
+  array support is for exactly that shape.
+- **No config point yet** — the Timberdoodle base URL is hardcoded in
+  `TimberdoodleHisExt.fan`. Add a real Xeto settings field on the `his`
+  lib if this needs to run against anything but the default host/port.
+- **Verified on plain, open-source Haxall** — not SkySpark specifically.
+  The `hx::IHisExt` mixin itself is shared, open infrastructure, so the
+  same library should be a drop-in for SkySpark too, but that's a claim
+  to verify independently, not assume.

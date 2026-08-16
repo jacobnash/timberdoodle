@@ -1,0 +1,87 @@
+---
+title: Fault Detection
+---
+
+Fault detection is `fault_detector.py`: a decoupled third MQTT subscriber
+plus a periodic sweep of `point_history`, evaluating rules you configure
+through the [Fault API](/api/fault) and recording open/resolved faults in
+Postgres. It doesn't hook into `ingest.py` at all — MQTT already fans
+one message out to every subscriber for free, so a second subscription
+gets a live copy of every reading with zero coupling to the ingest hot
+path.
+
+## Cur vs. His — why there are two evaluation modes
+
+Some faults are only detectable in the moment; others fundamentally need
+a time window. A `range` check ("is this value currently outside
+bounds?") only makes sense against a live reading as it arrives. A
+`stuck` or `stale` check ("has this value stopped changing?", "has this
+point stopped reporting?") is meaningless without looking back over
+history — there's no such thing as a single reading being "stale."
+
+So rules declare a `mode`:
+
+- **`cur`** — evaluated in real time, directly off the MQTT message as it
+  arrives. Only `range` rules run in this mode.
+- **`his`** — evaluated periodically (every `--his-interval` seconds,
+  default 30) against `point_history`. Only `stuck`/`stale` rules run in
+  this mode.
+
+One important asymmetry: a rule's `topic_glob` is matched against the
+**raw MQTT topic** in Cur mode, but against the **`urn:point:{topic}`
+URI** in His mode (since His-mode rules query `point_history`, which is
+keyed by URI, not topic). Same glob syntax, different string underneath —
+worth double-checking if a rule silently never fires.
+
+## What each rule type actually checks — and where it doesn't fire
+
+**`range`** — faulted if the value is outside `[min, max]`. Only numeric,
+non-boolean values can ever match: a `None`, a string, or a boolean value
+is treated as *not faulted*, never as an error. That's deliberate — a
+sensor going offline and reporting garbage is a different failure mode
+than a real value being out of bounds, and `range` isn't the rule that
+catches it. If you need to know when a point stops reporting sensible
+values at all, that's what `stale` is for.
+
+**`stuck`** — faulted if every reading in the trailing `stuck_seconds`
+window is the same value, *and* at least one reading exists in that
+window. A point with **zero** readings in the window isn't "stuck," it's
+silent — again, that's `stale`'s job, not `stuck`'s. Pick `stuck_seconds`
+longer than the point's natural dwell time at one value, or a
+legitimately-stable-but-healthy point (an unoccupied zone's flat
+temperature, say) will false-positive.
+
+**`stale`** — faulted if the most recent reading is older than
+`max_age_seconds`. A point that has **never** reported even once is *not*
+flagged stale — there's no reliable "first seen" time to measure
+staleness from, so a point that was misconfigured from day one and never
+ingested anything will never trigger this rule. It only catches a point
+that *stops* reporting after having reported at least once.
+
+## The roster is live, not configured
+
+A His-mode rule's set of points to evaluate isn't a separate list you
+maintain — it's `SELECT DISTINCT point_uri FROM point_history` filtered
+by the rule's `topic_glob`. New points that start reporting are picked up
+automatically, with zero additional configuration. The flip side is the
+same as the `stale` gap above: a point that's never reported never
+appears in any His-mode roster.
+
+## Fault lifecycle — transitions only
+
+Opening a fault that's already open is a no-op (no new row, no webhook).
+Webhooks fire only on the **not-open → open** and **open → resolved**
+transitions — there are no periodic "still faulted" pings while a fault
+stays open. See [Webhooks](/webhooks) for delivery semantics.
+
+## Upstream: sampling and change-of-value
+
+Fault detection evaluates whatever readings actually arrive — it has no
+say over *how often* a point reports or *which* changes get published in
+the first place. That's configured upstream, in FBF's connection layer
+(`his_collect_cov`, `his_collect_interval`, matching real Haystack/Haxall
+semantics). See FBF's own `bacnet-discovery-api.md` (section 3b) for the
+full writeup, including the one real gap worth knowing before you lean on
+it: there's no default rate-limit tiering, so an unthrottled noisy point
+with only `his_collect_cov` set will publish (and therefore get
+evaluated) on every single change.

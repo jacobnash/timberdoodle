@@ -1,0 +1,32 @@
+# Marker-tag SET (subset match, most-specific wins - see mapping.classify_point)
+# -> real Brick EQUIPMENT class. Same engine as haystack_to_brick.yaml, applied
+# to equip-rec tags (ingested via ingest.ingest_equip_tags/ingest_haystack_equip_tags)
+# instead of point tags - classify_point doesn't know or care which kind of
+# entity it's classifying, only that hasTag triples exist for the URI.
+#
+# `ahu` is a real Haystack v4 marker (phIoT/lib/ahu.trio), already in live
+# use in this codebase's own fbf/src/fbf/provision_haxall.py
+# (`ensure_equip(session, "AHU-1", site_ref, markers=["ahu"])`). `vav` is
+# the standard analogous marker (phIoT/lib/vav.trio).
+#
+# brick_class here is the real, canonical Brick class name, verified against
+# BrickSchema/Brick's source (see tests/fixtures/brick_subset.ttl's header
+# note) - not the AHU/VAV alias names. Brick's real class is
+# Air_Handling_Unit (AHU is an owl:equivalentClass alias of it), and
+# Variable_Air_Volume_Box (VAV is an alias of it, itself a subclass of
+# Terminal_Unit, not a direct Equipment subclass).
+rules:
+  - tags: [ahu]
+    brick_class: Air_Handling_Unit
+  - tags: [vav]
+    brick_class: Variable_Air_Volume_Box
+  - tags: [elec, meter]
+    brick_class: Electrical_Meter  # verified: brickschema.org/schema/Brick.ttl, subClassOf Meter; markers real (phIoT/lib/meter.trio's elec-meter/ac-elec-meter defs, phIoT/lib/elec.trio's elec marker)
+  - tags: [chiller]
+    brick_class: Chiller  # verified: chiller is real (phIoT/lib/chiller.trio, `is: [equip, elec-input]`); Chiller subClassOf HVAC_Equipment
+  - tags: [boiler]
+    brick_class: Boiler  # verified: boiler is real (phIoT/lib/boiler.trio, `is: [equip, elec-input]`); Boiler subClassOf HVAC_Equipment, Water_Heater
+  - tags: [pump]
+    brick_class: Pump  # verified: pump is real (phIoT/lib/motor.trio - a marker usable on equip or point, same pattern as `fan` below); Pump subClassOf HVAC_Equipment
+  - tags: [exhaust, fan]
+    brick_class: Exhaust_Fan  # verified: exhaust (phIoT/lib/conduit.trio) + fan (phIoT/lib/motor.trio) both real markers; Exhaust_Fan subClassOf Fan subClassOf HVAC_Equipment

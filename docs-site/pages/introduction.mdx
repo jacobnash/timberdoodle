@@ -1,0 +1,26 @@
+---
+title: Introduction
+---
+
+Timberdoodle is an ontology-agnostic building data platform: API-first,
+load-time-pluggable (Brick/Haystack/DBO), headless by design. Time-series
+readings live in Postgres/TimescaleDB — so Grafana, or anything else that
+speaks SQL, reads them natively, no plugin required. Entity and
+relationship data lives in Oxigraph as RDF, queryable over SPARQL.
+
+It feeds from FBF (BACnet/Modbus → MQTT, a sibling project) over the same
+wire envelope both `mqtt_listener.py` and `POST /ingest` consume.
+
+## Where to go next
+
+- **[Architecture](/architecture)** — the real service topology: what
+  runs where, what talks to what, and why.
+- **[Fault Detection](/fault-detection)** — how `range`/`stuck`/`stale`
+  rules work, and the gotchas that aren't obvious from the code.
+- **[Webhooks](/webhooks)** — delivery semantics, signing, retries, and
+  the one security caveat you need to know before registering one.
+- **[Haxall Drop-In](/haxall-drop-in)** — how Timberdoodle becomes the
+  actual history backend behind a real Haxall project, proven live.
+- **API Reference** — both APIs, generated live from the same
+  `openapi.yaml` / `fault-api-openapi.yaml` files each process serves at
+  `GET /openapi.yaml`.

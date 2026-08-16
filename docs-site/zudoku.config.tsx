@@ -1,0 +1,112 @@
+import type { ZudokuConfig } from "zudoku";
+
+const config: ZudokuConfig = {
+  metadata: {
+    title: "%s | Timberdoodle",
+    defaultTitle: "Timberdoodle",
+    description: "Ontology-agnostic building data platform: API-first, load-time-pluggable, headless by design.",
+    favicon: "/favicon.png",
+  },
+  site: {
+    title: "Timberdoodle",
+    logo: {
+      src: { light: "/logo-light.png", dark: "/logo-dark.png" },
+      alt: "Timberdoodle",
+      width: "306px",
+    },
+  },
+  theme: {
+    light: {
+      background: "#FAF6EE",
+      foreground: "#2B2118",
+      card: "#FFFDF9",
+      cardForeground: "#2B2118",
+      primary: "#4B6043",
+      primaryForeground: "#FAF6EE",
+      secondary: "#E4E8DA",
+      secondaryForeground: "#2B2118",
+      muted: "#EFEBE1",
+      mutedForeground: "#6B6053",
+      accent: "#F0E6D8",
+      accentForeground: "#2B2118",
+      border: "#DDD3C0",
+      input: "#DDD3C0",
+      ring: "#C17A3D",
+      radius: "0.4rem",
+    },
+    dark: {
+      background: "#1C1712",
+      foreground: "#F0E9DC",
+      card: "#262019",
+      cardForeground: "#F0E9DC",
+      primary: "#7A9A6B",
+      primaryForeground: "#14150F",
+      secondary: "#33291F",
+      secondaryForeground: "#F0E9DC",
+      muted: "#2A2318",
+      mutedForeground: "#B8AC98",
+      accent: "#3A2E20",
+      accentForeground: "#F0E9DC",
+      border: "#453A2C",
+      input: "#453A2C",
+      ring: "#D89050",
+    },
+  },
+  navigation: [
+    {
+      type: "category",
+      label: "Documentation",
+      icon: "book",
+      items: ["/introduction", "/architecture", "/fault-detection", "/webhooks", "/haxall-drop-in"],
+    },
+    {
+      type: "category",
+      label: "API Reference",
+      icon: "folder-cog",
+      items: [
+        { type: "link", label: "All APIs", to: "/catalog" },
+        { type: "link", label: "Ingest API", to: "/api/ingest" },
+        { type: "link", label: "Fault API", to: "/api/fault" },
+        { type: "link", label: "Derivation API", to: "/api/derivation" },
+        { type: "link", label: "FBF API (BACnet/Modbus)", to: "/api/fbf" },
+      ],
+    },
+  ],
+  redirects: [{ from: "/", to: "/introduction" }],
+  catalogs: {
+    path: "/catalog",
+    label: "All APIs",
+  },
+  apis: [
+    {
+      type: "file",
+      input: "../openapi.yaml",
+      path: "/api/ingest",
+      categories: [{ label: "Timberdoodle APIs", tags: ["Ingest API"] }],
+    },
+    {
+      type: "file",
+      input: "../fault-api-openapi.yaml",
+      path: "/api/fault",
+      categories: [{ label: "Timberdoodle APIs", tags: ["Fault API"] }],
+    },
+    {
+      type: "file",
+      input: "../derivation-api-openapi.yaml",
+      path: "/api/derivation",
+      categories: [{ label: "Timberdoodle APIs", tags: ["Derivation API"] }],
+    },
+    {
+      // FBF is a separate, independently-versioned sibling project
+      // (../../fbf, not part of this repo) - own category, not lumped
+      // into "Timberdoodle APIs", so that separation stays visible here
+      // too.
+      type: "file",
+      input: "../../fbf/openapi.yaml",
+      path: "/api/fbf",
+      categories: [{ label: "FBF APIs", tags: ["Discovery, Connections & Devices"] }],
+    },
+  ],
+};
+
+export default config;

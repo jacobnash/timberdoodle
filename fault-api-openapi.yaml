@@ -1,0 +1,322 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Fault API
+  version: "1.0.0"
+  description: |
+    CRUD for fault-detection rules and webhook subscriptions, plus a read
+    endpoint over detected faults. This is a separate process/port from
+    the ingest API (`ingest_api.py`, `openapi.yaml`) - each API's spec is
+    served by the process it actually describes, so this document is
+    never a stale claim about a process that doesn't own it.
+
+    The actual detection work (evaluating rules against live readings and
+    historical data, firing webhooks) happens in a third process,
+    `fault_detector.py`, which reads the same `rules.json`/`webhooks.json`
+    files this API writes - there's no direct connection between this API
+    and the detector beyond that shared config.
+servers:
+  - url: http://localhost:8080/fault
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path. GET requests need HTTP basic auth against
+      gateway/read.htpasswd; POST/DELETE additionally need
+      gateway/write.htpasswd.
+  - url: http://localhost:8002
+    description: >-
+      Direct - only reachable if you're running this process bare-metal
+      (`python -m timberdoodle.fault_api --help`) or from inside the
+      Docker network. docker-compose.yml does not publish this port to
+      the host, so this URL will refuse connections in the normal
+      containerized setup.
+tags:
+  - name: Rules
+    description: Configure what counts as a fault.
+  - name: Webhooks
+    description: Configure where fault open/resolve events get delivered.
+  - name: Faults
+    description: Read the faults `fault_detector.py` has actually detected.
+paths:
+  /rules:
+    post:
+      operationId: createRule
+      tags: [Rules]
+      summary: Create a fault-detection rule
+      description: |
+        `mode` is `"cur"` (evaluated in real time against live MQTT
+        readings) or `"his"` (evaluated periodically against
+        `point_history`). `type` is `"range"` (Cur-only), or `"stuck"`/
+        `"stale"` (His-only). Extra fields depend on `type`: `range` needs
+        `min`/`max`; `stuck` needs `stuck_seconds`; `stale` needs
+        `max_age_seconds`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRuleRequest"
+            examples:
+              range:
+                summary: Real-time out-of-range check
+                value: { "name": "zone-temp-out-of-range", "mode": "cur", "type": "range", "applies_to": { "topic_glob": "fbf/mock-ahu-1/*" }, "min": 60.0, "max": 80.0 }
+              stuck:
+                summary: Batch stuck-value check
+                value: { "name": "zone-temp-stuck", "mode": "his", "type": "stuck", "applies_to": { "topic_glob": "fbf/mock-ahu-1/*" }, "stuck_seconds": 3600 }
+              stale:
+                summary: Batch missing-heartbeat check
+                value: { "name": "zone-temp-stale", "mode": "his", "type": "stale", "applies_to": { "topic_glob": "fbf/mock-ahu-1/*" }, "max_age_seconds": 900 }
+              brick_class:
+                summary: Ontology-scoped check - every point of this Brick class, any building/naming scheme
+                value: { "name": "zone-temp-out-of-range-any-building", "mode": "cur", "type": "range", "applies_to": { "brick_class": "Zone_Air_Temperature_Sensor" }, "min": 60.0, "max": 80.0 }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    get:
+      operationId: listRules
+      tags: [Rules]
+      summary: List every configured rule
+      responses:
+        "200":
+          description: Every rule, as a JSON array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Rule"
+  /rules/{id}:
+    delete:
+      operationId: deleteRule
+      tags: [Rules]
+      summary: Delete a rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted. No response body.
+        "404":
+          description: No rule with that id.
+  /webhooks:
+    post:
+      operationId: createWebhook
+      tags: [Webhooks]
+      summary: Register a webhook subscription
+      description: >-
+        **No SSRF protection in v1.** `url` is fetched directly by
+        `fault_detector.py` with no restriction on target address - do not
+        expose this API to untrusted callers, since a registered webhook
+        could target internal infrastructure (e.g. `localhost:5433`,
+        `oxigraph:7878`). Appropriate for the single-trusted-operator,
+        localhost-docker-compose deployment this project targets today.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookRequest"
+            examples:
+              default:
+                value: { "url": "https://example.com/hooks/timberdoodle", "secret": "a-shared-secret", "filter": { "rule_id": "zone-temp-out-of-range" } }
+      responses:
+        "201":
+          description: Created. The `secret` is returned here once - every later GET redacts it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    get:
+      operationId: listWebhooks
+      tags: [Webhooks]
+      summary: List every registered webhook
+      description: "`secret` is always redacted (`null`) in this response - it's only ever shown once, in the POST /webhooks response at creation time."
+      responses:
+        "200":
+          description: Every webhook, secrets redacted.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Webhook"
+  /webhooks/{id}:
+    delete:
+      operationId: deleteWebhook
+      tags: [Webhooks]
+      summary: Delete a webhook subscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted. No response body.
+        "404":
+          description: No webhook with that id.
+  /faults:
+    get:
+      operationId: listFaults
+      tags: [Faults]
+      summary: List detected faults
+      parameters:
+        - name: status
+          in: query
+          description: Filter to only-open or only-resolved faults. Omit for both.
+          schema:
+            type: string
+            enum: [open, resolved]
+        - name: point_uri
+          in: query
+          description: Filter to faults on one point, e.g. `urn:point:fbf/mock-ahu-1/analogValue,1`.
+          schema:
+            type: string
+        - name: rule_id
+          in: query
+          description: Filter to faults raised by one rule.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Every matching fault, most recent first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Fault"
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: This document
+      description: Served raw, straight off disk - the same file you're reading right now.
+      responses:
+        "200":
+          description: The OpenAPI 3.1 spec for this API, as YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    CreateRuleRequest:
+      type: object
+      required: [name, mode, type, applies_to]
+      properties:
+        name:
+          type: string
+          example: zone-temp-out-of-range
+        mode:
+          type: string
+          enum: [cur, his]
+        type:
+          type: string
+          enum: [range, stuck, stale]
+        applies_to:
+          type: object
+          description: |
+            Exactly one of `topic_glob` or `brick_class` - `topic_glob` for the
+            original per-topic-string targeting, `brick_class` to target every
+            point already classified into that Brick class (see
+            `mapping.classify_point`) regardless of which topic/building/naming
+            scheme it came from. `fault_detector.py` resolves a `brick_class`
+            roster via SPARQL against the same Oxigraph graph mapping.py writes
+            to, not against the topic string at all.
+          properties:
+            topic_glob:
+              type: string
+              description: Matched against the raw MQTT topic (Cur) or `urn:point:{topic}` (His) via fnmatch.
+              example: "fbf/mock-ahu-1/*"
+            brick_class:
+              type: string
+              description: A Brick class name (e.g. `Zone_Air_Temperature_Sensor`), not a full URI.
+              example: "Zone_Air_Temperature_Sensor"
+        min:
+          type: number
+          description: range only.
+        max:
+          type: number
+          description: range only.
+        stuck_seconds:
+          type: number
+          description: stuck only.
+        max_age_seconds:
+          type: number
+          description: stale only.
+    Rule:
+      allOf:
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+        - $ref: "#/components/schemas/CreateRuleRequest"
+    CreateWebhookRequest:
+      type: object
+      required: [url, secret]
+      properties:
+        url:
+          type: string
+          example: "https://example.com/hooks/timberdoodle"
+        secret:
+          type: string
+          description: "Used to HMAC-SHA256 sign every delivered payload (X-Timberdoodle-Signature header, sha256=... format). Shown once, at creation."
+        filter:
+          type: ["object", "null"]
+          description: Omit or null to receive every fault. Currently supports scoping to one rule_id.
+          properties:
+            rule_id:
+              type: string
+    Webhook:
+      allOf:
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+        - $ref: "#/components/schemas/CreateWebhookRequest"
+    Fault:
+      type: object
+      required: [id, rule_id, point_uri, status, started_at]
+      properties:
+        id:
+          type: integer
+        rule_id:
+          type: string
+        point_uri:
+          type: string
+        status:
+          type: string
+          enum: [open, resolved]
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: ["string", "null"]
+          format: date-time
+        detail:
+          type: ["object", "null"]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+  responses:
+    BadRequest:
+      description: Malformed JSON body, or a required field was missing.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

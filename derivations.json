@@ -1,0 +1,160 @@
+[
+  {
+    "id": "3ccb3494513e4b5ba81aef159fe81d7c",
+    "name": "zone-temp-deviation",
+    "kind": "formula",
+    "fn_source": "def run(inputs, row):\n    temp = inputs.get('zoneTemp') or []\n    sp = inputs.get('zoneSp') or []\n    if not temp or not sp:\n        return None\n    return temp[-1][1] - sp[-1][1]",
+    "test_cases": [
+      {
+        "inputs": {
+          "zoneTemp": [
+            [
+              "2026-01-01T00:00:00Z",
+              72.0
+            ]
+          ],
+          "zoneSp": [
+            [
+              "2026-01-01T00:00:00Z",
+              70.0
+            ]
+          ]
+        },
+        "row": {},
+        "expected": 2.0
+      }
+    ],
+    "window_seconds": 3600,
+    "output": {
+      "brick_class": null,
+      "unit": "\u00b0F",
+      "label": "Zone Air Temperature Deviation"
+    },
+    "depends_on": [],
+    "select": "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?target ?zoneTemp ?zoneSp WHERE { ?target brick:hasPoint ?zoneTemp, ?zoneSp . ?zoneTemp a brick:Zone_Air_Temperature_Sensor . ?zoneSp a brick:Zone_Air_Temperature_Setpoint . }",
+    "target_var": "target",
+    "input_vars": [
+      "zoneTemp",
+      "zoneSp"
+    ],
+    "interval_seconds": 60
+  },
+  {
+    "id": "486cb553965d480f87c1934cd019657a",
+    "name": "ahu-delta-t",
+    "kind": "formula",
+    "fn_source": "def run(inputs, row):\n    discharge = inputs.get('dischargeTemp') or []\n    ret = inputs.get('returnTemp') or []\n    if not discharge or not ret:\n        return None\n    return ret[-1][1] - discharge[-1][1]",
+    "test_cases": [
+      {
+        "inputs": {
+          "dischargeTemp": [
+            [
+              "2026-01-01T00:00:00Z",
+              58.0
+            ]
+          ],
+          "returnTemp": [
+            [
+              "2026-01-01T00:00:00Z",
+              72.0
+            ]
+          ]
+        },
+        "row": {},
+        "expected": 14.0
+      }
+    ],
+    "window_seconds": 3600,
+    "output": {
+      "brick_class": null,
+      "unit": "\u00b0F",
+      "label": "AHU Coil Delta-T"
+    },
+    "depends_on": [],
+    "select": "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?target ?dischargeTemp ?returnTemp WHERE { ?target a brick:Air_Handling_Unit . ?target brick:hasPoint ?dischargeTemp, ?returnTemp . ?dischargeTemp a brick:Discharge_Air_Temperature_Sensor . ?returnTemp a brick:Return_Air_Temperature_Sensor . }",
+    "target_var": "target",
+    "input_vars": [
+      "dischargeTemp",
+      "returnTemp"
+    ],
+    "interval_seconds": 60
+  },
+  {
+    "id": "cbee35a7424945b4b5f831b54ae097c5",
+    "name": "fan-duty-cycle",
+    "kind": "formula",
+    "fn_source": "def run(inputs, row):\n    series = inputs.get('fanStatus') or []\n    if not series:\n        return None\n    active = sum(1 for _, v in series if v == 'active')\n    return active / len(series)",
+    "test_cases": [
+      {
+        "inputs": {
+          "fanStatus": [
+            [
+              "2026-01-01T00:00:00Z",
+              "active"
+            ],
+            [
+              "2026-01-01T00:05:00Z",
+              "inactive"
+            ],
+            [
+              "2026-01-01T00:10:00Z",
+              "active"
+            ]
+          ]
+        },
+        "row": {},
+        "expected": 0.6666666666666666
+      }
+    ],
+    "window_seconds": 3600,
+    "output": {
+      "brick_class": null,
+      "unit": "fraction",
+      "label": "Fan Duty Cycle"
+    },
+    "depends_on": [],
+    "select": "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?target ?fanStatus WHERE { ?target brick:hasPoint ?fanStatus . ?fanStatus a brick:Fan_Status . }",
+    "target_var": "target",
+    "input_vars": [
+      "fanStatus"
+    ],
+    "interval_seconds": 60
+  },
+  {
+    "id": "276466eebbea429ba74e8fa04af144d6",
+    "name": "building-total-electric-usage",
+    "kind": "rollup",
+    "fn_source": "def run(inputs, row):\n    vals = [s[-1][1] for s in inputs if s]\n    return sum(vals) if vals else None",
+    "test_cases": [
+      {
+        "inputs": [
+          [
+            [
+              "2026-01-01T00:00:00Z",
+              1200.0
+            ]
+          ],
+          [
+            [
+              "2026-01-01T00:00:00Z",
+              850.5
+            ]
+          ]
+        ],
+        "row": {},
+        "expected": 2050.5
+      }
+    ],
+    "window_seconds": 3600,
+    "output": {
+      "brick_class": null,
+      "unit": "kWh",
+      "label": "Building Total Electric Usage"
+    },
+    "depends_on": [],
+    "root_select": "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?root WHERE { ?root a brick:Building }",
+    "part_relationship": "brick:hasPart",
+    "leaf_point_class": "brick:Electric_Energy_Sensor",
+    "interval_seconds": 60
+  }
+]

@@ -1,0 +1,372 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Ingest API
+  version: "1.0.0"
+  description: |
+    Push-style ingestion front door for building-data sources that would
+    rather POST a reading directly than run their own MQTT loop. Same wire
+    envelope, same underlying `ingest_reading()` code path as the MQTT
+    listener - two front doors, one code path, so nothing behaves
+    differently depending on which one a source happens to use.
+
+    This document is served live by the API itself at `GET /openapi.yaml`
+    - it is not a promise made separately from the code, it is read
+    straight off disk by the same process handling `/ingest`.
+servers:
+  - url: http://localhost:8080/ingest
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path. GET requests need HTTP basic auth against
+      gateway/read.htpasswd; POST/DELETE additionally need
+      gateway/write.htpasswd.
+  - url: http://localhost:8000
+    description: >-
+      Direct - only reachable if you're running this process bare-metal
+      (`python -m timberdoodle.ingest_api --help`) or from inside the
+      Docker network. docker-compose.yml does not publish this port to
+      the host, so this URL will refuse connections in the normal
+      containerized setup.
+tags:
+  - name: Ingest
+    description: Push point readings into Timberdoodle over HTTP.
+  - name: History
+    description: >-
+      Read and correct a point's stored history. Exists primarily so
+      Timberdoodle can act as a drop-in history-storage backend for
+      Haxall/SkySpark's `IHisExt` extension point (span-based read,
+      point-scoped read/write/delete) - see the "Haxall drop-in" doc page.
+paths:
+  /ingest:
+    post:
+      operationId: ingestReading
+      tags: [Ingest]
+      summary: Ingest one or more point readings
+      description: |
+        Accepts either a single reading object or a JSON array of them, in
+        one request. Each reading is written to both the graph (identity +
+        source topic) and the time-series store (the value itself), via the
+        exact same code path `mqtt_listener.py` uses for MQTT-sourced
+        readings - point identity is the topic string itself
+        (`urn:point:{point}`), so the same point pushed via HTTP and via
+        MQTT under the same topic is the same point.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/Reading"
+                - type: array
+                  items:
+                    $ref: "#/components/schemas/Reading"
+            examples:
+              single:
+                summary: One reading
+                value: { "point": "fbf/mock-ahu-1/analogValue,1", "value": 71.0, "ts": 1786454667.103 }
+              batch:
+                summary: Multiple readings in one request
+                value:
+                  - { "point": "fbf/mock-ahu-1/analogValue,1", "value": 71.0 }
+                  - { "point": "fbf/mock-ahu-1/binaryValue,1", "value": "active" }
+      responses:
+        "204":
+          description: Ingested successfully. No response body.
+        "400":
+          description: Malformed JSON body, or a reading missing the required `point` field.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { "error": "Expecting value: line 1 column 1 (char 0)" }
+        "404":
+          description: Unknown path (only `/ingest` and `/openapi.yaml` exist).
+  /tags:
+    post:
+      operationId: ingestTags
+      tags: [Ingest]
+      summary: Push Haystack tags for a point and classify it into Brick
+      description: |
+        HTTP equivalent of the `<topic>/tags` MQTT suffix convention
+        `mqtt_listener.py` already understands - same `ingest_tags()` code
+        path. Marker tags (`true`) become `haystack:hasTag` triples;
+        valued tags become `haystack:<name>` triples. After writing tags,
+        runs the same Haystack-to-Brick classification `mapping.py` uses
+        elsewhere and returns the outcome, so a caller can tell
+        direct/fallback/miss apart without a separate SPARQL query.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagsRequest"
+            example:
+              point: fbf/mock-ahu-1/analogValue,1
+              tags: { zone: true, air: true, temp: true, sensor: true, unit: "°F" }
+      responses:
+        "200":
+          description: Tags written; classification result for this point.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassificationResult"
+              example: { "point": "urn:point:fbf/mock-ahu-1/analogValue,1", "outcome": "direct", "brickClass": "Zone_Air_Temperature_Sensor" }
+        "400":
+          description: Malformed JSON body, or missing `point`/`tags`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /equip/merge:
+    post:
+      operationId: mergeEquip
+      tags: [Ingest]
+      summary: Declare two equipment URIs are the same physical equipment
+      description: |
+        The same real AHU can end up with two different equip URIs if it's
+        bridged through more than one source - e.g. `urn:equip:fbf/ahu-3`
+        (BACnet, keyed by connection topic_prefix) and
+        `urn:equip:haystack:AHU-1` (Haystack, keyed by its own ref).
+        Deliberately never auto-detected (matching on label/`dis` text is
+        exactly the kind of guess that silently merges the wrong things) -
+        the caller already has both real URIs in hand and is declaring a
+        fact, not supplying a ref to resolve. Asserts `owl:sameAs` in both
+        directions (Oxigraph doesn't reason, so a query needs both triples
+        to actually exist). See `ingest.merge_equip` / `ingest.points_of_equip`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EquipMergeRequest"
+            example: { "a": "urn:equip:fbf/ahu-3", "b": "urn:equip:haystack:AHU-1" }
+      responses:
+        "204":
+          description: Merged. No response body.
+        "400":
+          description: Malformed JSON body, or missing `a`/`b`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /part:
+    post:
+      operationId: linkPartOf
+      tags: [Ingest]
+      summary: Declare a point or sub-component's place in a larger equipment
+      description: |
+        Asserts `brick:hasPart`/`brick:isPartOf` between `parent` and
+        `child`. Manual only, by design - BACnet's flat object list has no
+        signal for "these 3 points are the economizer sub-part of this
+        AHU", and this repo deliberately doesn't guess that structure
+        (a wrong `hasPart` edge silently corrupts topology in a way that's
+        costlier to notice than a wrong Brick class label). `child`/`parent`
+        can be any real URI already in the graph - a point directly under a
+        sub-component, or a sub-component under its equipment. See
+        `ingest.link_part_of`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartOfRequest"
+            example: { "child": "urn:equip:fbf/ahu-3/economizer", "parent": "urn:equip:fbf/ahu-3" }
+      responses:
+        "204":
+          description: Linked. No response body.
+        "400":
+          description: Malformed JSON body, or missing `child`/`parent`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /history:
+    get:
+      operationId: getHistory
+      tags: [History]
+      summary: Read a point's stored history over a time span
+      description: |
+        Mirrors Haxall's `IHisExt.read` span semantics: `start`/`end` are
+        both optional and inclusive - omit both for the point's entire
+        history. Results are always ordered oldest-first.
+      parameters:
+        - name: point
+          in: query
+          required: true
+          description: Same raw topic/label `POST /ingest` uses - resolved to the same point identity internally.
+          schema:
+            type: string
+          example: fbf/mock-ahu-1/analogValue,1
+        - name: start
+          in: query
+          description: Unix epoch seconds, inclusive. Omit for the beginning of history.
+          schema:
+            type: number
+        - name: end
+          in: query
+          description: Unix epoch seconds, inclusive. Omit for the current time.
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Matching history items, oldest first. Empty array if the point has no history in range.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HistoryItem"
+              example: [{ "ts": 1786454667.103, "value": 71.0 }]
+        "400":
+          description: Missing `point`, or `start`/`end` isn't a valid unix timestamp.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteHistoryItem
+      tags: [History]
+      summary: Delete one point's history item at an exact timestamp
+      description: >-
+        The Timberdoodle side of Haxall's `IHisExt.write` delete
+        convention (a written value equal to `xeto::None.val` means
+        "remove this item", not "store null"). Deletes at most one row -
+        the one at exactly this timestamp.
+      parameters:
+        - name: point
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: ts
+          in: query
+          required: true
+          description: Unix epoch seconds, exact match.
+          schema:
+            type: number
+      responses:
+        "204":
+          description: Deleted. No response body.
+        "400":
+          description: Missing `point`/`ts`, or `ts` isn't a valid unix timestamp.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No history item at exactly that point + timestamp.
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: This document
+      description: Served raw, straight off disk - the same file you're reading right now.
+      responses:
+        "200":
+          description: The OpenAPI 3.1 spec for this API, as YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    Reading:
+      type: object
+      required: [point]
+      properties:
+        point:
+          type: string
+          description: >-
+            Point identity - the raw source topic/label. Becomes
+            `urn:point:{point}` in the graph; the same string used
+            consistently by a source is what makes repeated readings
+            resolve to the same point.
+          example: fbf/mock-ahu-1/analogValue,1
+        value:
+          description: The reading value - whatever type the source produced.
+          oneOf:
+            - type: number
+            - type: string
+            - type: boolean
+            - type: "null"
+          example: 71.0
+        ts:
+          type: number
+          description: Unix epoch seconds. Defaults to the ingest server's current time if omitted.
+          example: 1786454667.103
+      example: { "point": "fbf/mock-ahu-1/analogValue,1", "value": 71.0, "ts": 1786454667.103 }
+    HistoryItem:
+      type: object
+      required: [ts, value]
+      properties:
+        ts:
+          type: number
+          description: Unix epoch seconds.
+        value:
+          description: Whatever type was originally stored.
+          oneOf:
+            - type: number
+            - type: string
+            - type: boolean
+            - type: "null"
+    TagsRequest:
+      type: object
+      required: [point, tags]
+      properties:
+        point:
+          type: string
+          description: Same point identity `POST /ingest` uses - resolves to the same `urn:point:{point}` entity.
+          example: fbf/mock-ahu-1/analogValue,1
+        tags:
+          type: object
+          description: Haystack tag name -> value. `true` for marker tags, any JSON scalar/object/array for valued tags.
+        ts:
+          type: number
+          description: Unix epoch seconds. Accepted for envelope symmetry with Reading; not currently used by classification.
+      example: { "point": "fbf/mock-ahu-1/analogValue,1", "tags": { "zone": true, "air": true, "temp": true, "sensor": true } }
+    ClassificationResult:
+      type: object
+      required: [point, outcome]
+      properties:
+        point:
+          type: string
+          description: The point's full graph URI (`urn:point:{point}`).
+        outcome:
+          type: string
+          enum: [direct, fallback, miss]
+          description: >-
+            See mapping.classify_point: direct (a rule's tags are a full
+            subset of this point's tags), fallback (partial overlap, a
+            PROJ subclass of the closest rule), or miss (TD:UnmappedPoint,
+            no rule shares any tag).
+        brickClass:
+          type: string
+          nullable: true
+          description: The matched (or nearest-ancestor) Brick class name, or null on a miss.
+    EquipMergeRequest:
+      type: object
+      required: [a, b]
+      properties:
+        a:
+          type: string
+          description: Full equip URI (e.g. `urn:equip:fbf/ahu-3` or `urn:equip:haystack:AHU-1`), not a bare topic/ref.
+        b:
+          type: string
+          description: Full equip URI - the other identity for the same physical equipment.
+      example: { "a": "urn:equip:fbf/ahu-3", "b": "urn:equip:haystack:AHU-1" }
+    PartOfRequest:
+      type: object
+      required: [child, parent]
+      properties:
+        child:
+          type: string
+          description: Full URI of the point or sub-component being placed.
+        parent:
+          type: string
+          description: Full URI of the equipment or sub-component it belongs to.
+      example: { "child": "urn:equip:fbf/ahu-3/economizer", "parent": "urn:equip:fbf/ahu-3" }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable explanation of what was wrong with the request.

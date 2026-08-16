@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light dark;
+  --border: #d0d0d0;
+  --muted: #666;
+  --accent: #2b6cb0;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", sans-serif;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  body { color: #eee; background: #111; }
+  :root { --border: #3a3a3a; --muted: #999; }
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 { font-size: 1.1rem; margin: 0; }
+#status { color: var(--muted); font-size: 0.85rem; }
+
+main {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  height: calc(100vh - 3rem);
+}
+
+#tree {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding: 0.5rem;
+}
+
+#tree details { margin-bottom: 0.25rem; }
+#tree summary { cursor: pointer; font-weight: 600; padding: 0.15rem 0; }
+#tree ul { list-style: none; margin: 0.15rem 0 0.5rem 0.75rem; padding: 0; }
+#tree li { padding: 0.1rem 0; }
+#tree button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0.1rem 0.25rem;
+  text-align: left;
+  width: 100%;
+  border-radius: 3px;
+}
+#tree button:hover { background: rgba(43, 108, 176, 0.12); }
+#tree button.selected { background: var(--accent); color: #fff; }
+
+#detail { padding: 1rem; overflow-y: auto; }
+.hint { color: var(--muted); }
+
+.tag-list { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.tag-list li {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+canvas { border: 1px solid var(--border); border-radius: 4px; max-width: 100%; }

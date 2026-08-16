@@ -1,0 +1,1071 @@
+# Small vendored excerpt of the real Brick ontology - just the classes
+# mapping.py's rules actually reference, plus their real subClassOf chain
+# up to brick:Point/brick:Entity, extracted verbatim (including their real
+# SHACL blank-node shapes) so this still exercises the same blank-node-
+# handling path the full ~1800-class ontology does, without shipping the
+# whole thing or depending on a manually-placed /tmp/Brick.ttl.
+#
+# The Equipment/HVAC_Equipment/Air_Handling_Unit/Terminal_Unit/
+# Variable_Air_Volume_Box block (for rules/haystack_equip_to_brick.yaml)
+# is verified against BrickSchema/Brick's real source (bricksrc/equipment.py
+# + generate_brick.py's define_classes() parent-assignment: equipment_subclasses
+# top-level entries default to rdfs:subClassOf brick:Equipment,
+# hvac_subclasses entries default to brick:HVAC_Equipment), not the built
+# Brick.ttl artifact directly - the AHU/VAV alias nodes themselves are
+# deliberately omitted here since the rule file classifies into the
+# canonical names (Air_Handling_Unit, Variable_Air_Volume_Box), not the
+# aliases.
+@prefix brick: <https://brickschema.org/schema/Brick#> .
+@prefix bsh: <https://brickschema.org/schema/BrickShape#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix qudtqk: <http://qudt.org/vocab/quantitykind/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rec: <https://w3id.org/rec#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix tag: <https://brickschema.org/schema/BrickTag#> .
+
+brick:Air_Quality_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Air Quality Sensor"@en ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "A sensor which provides a measure of air quality"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class rec:DoubleValueObservation ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Quality ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Point,
+        tag:Quality,
+        tag:Sensor ;
+    brick:hasQuantity qudtqk:DimensionlessRatio .
+
+brick:Air_Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Air Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Temperature_Sensor ;
+    skos:definition "Measures the temperature of air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Point,
+        tag:Sensor,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature ;
+    brick:hasSubstance brick:Air .
+
+brick:Air_Temperature_Setpoint a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Air Temperature Setpoint"@en ;
+    rdfs:subClassOf brick:Temperature_Setpoint ;
+    skos:definition "Sets temperature of air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Setpoint ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Point,
+        tag:Setpoint,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature ;
+    brick:hasSubstance brick:Air .
+
+brick:CO2_Level_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "CO2 Level Sensor"@en ;
+    rdfs:subClassOf brick:CO2_Sensor ;
+    skos:definition "Measures the concentration of CO2 in air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:CO2 ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Level ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:CO2,
+        tag:Level,
+        tag:Point,
+        tag:Sensor ;
+    brick:hasQuantity brick:CO2_Concentration ;
+    brick:hasSubstance brick:Air .
+
+brick:CO2_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "CO2 Sensor"@en ;
+    rdfs:subClassOf brick:Air_Quality_Sensor ;
+    skos:definition "Measures properties of CO2 in air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:CO2 ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:CO2,
+        tag:Point,
+        tag:Sensor ;
+    brick:hasQuantity brick:CO2_Concentration ;
+    brick:hasSubstance brick:Air .
+
+brick:Class a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Class"@en ;
+    rdfs:subClassOf brick:Entity .
+
+brick:Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Command"@en ;
+    rdfs:subClassOf brick:Point ;
+    owl:disjointWith brick:Alarm,
+        brick:Parameter,
+        brick:Sensor,
+        brick:Setpoint,
+        brick:Status ;
+    skos:definition "A Command is an output point that directly determines the behavior of equipment and/or affects relevant operational points."@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class rec:ActuationEvent ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Point .
+
+brick:Damper_Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Damper Command"@en ;
+    rdfs:subClassOf brick:Command ;
+    skos:definition "Controls properties of dampers"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Damper ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Damper,
+        tag:Point .
+
+brick:Damper_Position_Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Damper Position Command"@en ;
+    rdfs:subClassOf brick:Damper_Command,
+        brick:Position_Command ;
+    skos:definition "Controls the position (the degree of openness) of a damper"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Damper ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Position ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Damper,
+        tag:Point,
+        tag:Position ;
+    brick:hasQuantity brick:Position .
+
+brick:Damper_Position_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Damper Position Sensor"@en ;
+    rdfs:subClassOf brick:Position_Sensor ;
+    skos:definition "Measures the current position of a damper in terms of the percent of fully open"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Damper ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Position ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Damper,
+        tag:Point,
+        tag:Position,
+        tag:Sensor ;
+    brick:hasQuantity brick:Position .
+
+brick:Discharge_Air_Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Discharge Air Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Air_Temperature_Sensor ;
+    owl:equivalentClass brick:Supply_Air_Temperature_Sensor ;
+    skos:definition "Measures the temperature of discharge air"@en ;
+    brick:aliasOf brick:Supply_Air_Temperature_Sensor .
+
+brick:Entity a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Entity"@en ;
+    sh:property bsh:aliasOfShape,
+        bsh:hasLocationShape,
+        bsh:hasdeprecationShape,
+        bsh:isReplacedByShape,
+        bsh:latitudeShape,
+        bsh:longitudeShape,
+        bsh:timestampShape .
+
+brick:Fan_Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Fan Command"@en ;
+    rdfs:subClassOf brick:Command ;
+    skos:definition "Controls properties of fans"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Fan ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Fan,
+        tag:Point .
+
+brick:Fan_Status a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Fan Status"@en ;
+    rdfs:subClassOf brick:Status ;
+    skos:definition "Indicates properties of fans"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Fan ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Status ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Fan,
+        tag:Point,
+        tag:Status .
+
+brick:Humidity_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Humidity Sensor"@en ;
+    rdfs:seeAlso <https://en.wikipedia.org/wiki/Humidity> ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures the concentration of water vapor in air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Humidity ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Humidity,
+        tag:Point,
+        tag:Sensor ;
+    brick:hasQuantity qudtqk:PressureRatio .
+
+brick:Mixed_Air_Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Mixed Air Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Air_Temperature_Sensor ;
+    skos:definition "Measures the temperature of mixed air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Mixed ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Mixed,
+        tag:Point,
+        tag:Sensor,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature ;
+    brick:hasSubstance brick:Mixed_Air .
+
+brick:Outside_Air_Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Outside Air Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Air_Temperature_Sensor ;
+    skos:definition "Measures the temperature of outside air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Outside ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Outside,
+        tag:Point,
+        tag:Sensor,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature ;
+    brick:hasSubstance brick:Outside_Air .
+
+brick:Point a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Point"@en ;
+    rdfs:subClassOf brick:Class,
+        brick:Entity ;
+    sh:not [ sh:class brick:Equipment ;
+            sh:message "Instances of Point cannot be Equipment." ],
+        [ sh:class brick:Location ;
+            sh:message "Instances of Point cannot be Locations." ],
+        [ sh:class brick:Substance ;
+            sh:message "Instances of Point cannot be Substances." ],
+        [ sh:class brick:Quantity ;
+            sh:message "Instances of Point cannot be Quantities." ],
+        [ sh:class brick:Collection ;
+            sh:message "Instances of Point cannot be Collections." ],
+        [ sh:class brick:EntityProperty ;
+            sh:message "Instances of Point cannot be EntityProperties." ] ;
+    sh:property [ sh:maxCount 0 ;
+            sh:message "Points cannot have locations; use 'isPointOf' instead" ;
+            sh:path brick:hasLocation ],
+        [ a sh:PropertyShape ;
+            sh:class brick:Quantity ;
+            sh:name "has quantity" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:hasQuantity ],
+        [ a sh:PropertyShape ;
+            sh:class brick:Substance ;
+            sh:name "has substance" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:hasSubstance ],
+        [ a sh:PropertyShape ;
+            sh:name "is point of" ;
+            sh:nodeKind sh:IRI ;
+            sh:path rec:isPointOf ],
+        bsh:hasQuantityShape,
+        bsh:hasSubstanceShape,
+        bsh:hasUnitShape,
+        bsh:hasaggregateShape,
+        bsh:haselectricalComplexPowerShape,
+        bsh:haselectricalFlowShape,
+        bsh:haslastKnownValueShape,
+        bsh:hasresolutionShape,
+        bsh:isPointOfShape ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point .
+
+brick:Position_Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Position Command"@en ;
+    rdfs:subClassOf brick:Command ;
+    skos:definition "Controls or reports the position of some object"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Position ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Point,
+        tag:Position ;
+    brick:hasQuantity brick:Position .
+
+brick:Position_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Position Sensor"@en ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures the current position of a component in terms of a fraction of its full range of motion"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class rec:DoubleValueObservation ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Position ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Position,
+        tag:Sensor ;
+    brick:hasQuantity brick:Position .
+
+brick:Relative_Humidity_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Relative Humidity Sensor"@en ;
+    rdfs:subClassOf brick:Humidity_Sensor ;
+    skos:definition "Measures the present state of absolute humidity relative to a maximum humidity given the same temperature"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class rec:RelativeHumidityObservation ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Humidity ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Relative ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Humidity,
+        tag:Point,
+        tag:Relative,
+        tag:Sensor ;
+    brick:hasQuantity qudtqk:RelativeHumidity ;
+    brick:hasSubstance brick:Air .
+
+brick:Return_Air_Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Return Air Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Air_Temperature_Sensor ;
+    skos:definition "Measures the temperature of return air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Return ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Point,
+        tag:Return,
+        tag:Sensor,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature ;
+    brick:hasSubstance brick:Return_Air .
+
+brick:Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Sensor"@en ;
+    rdfs:seeAlso "https://xp20.ashrae.org/terminology/index.php?term=Sensor" ;
+    rdfs:subClassOf brick:Point ;
+    owl:disjointWith brick:Alarm,
+        brick:Command,
+        brick:Parameter,
+        brick:Setpoint,
+        brick:Status ;
+    skos:definition "A Sensor is an input point that represents the value of a device or instrument designed to detect and measure a variable (ASHRAE Dictionary)."@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Sensor .
+
+brick:Setpoint a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Setpoint"@en ;
+    rdfs:seeAlso <https://xp20.ashrae.org/terminology/index.php?term=setpoint>,
+        "https://xp20.ashrae.org/terminology/index.php?term=setpoint" ;
+    rdfs:subClassOf brick:Point ;
+    owl:disjointWith brick:Alarm,
+        brick:Command,
+        brick:Parameter,
+        brick:Sensor,
+        brick:Status ;
+    skos:definition "A Setpoint is an input value at which the desired property is set"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class bsh:LastKnownDoubleShape ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Setpoint ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Setpoint .
+
+brick:Status a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Status"@en ;
+    rdfs:subClassOf brick:Point ;
+    owl:disjointWith brick:Alarm,
+        brick:Command,
+        brick:Parameter,
+        brick:Sensor,
+        brick:Setpoint ;
+    skos:definition "A Status is input point that reports the current operating mode, state, position, or condition of an item. Statuses are observations and should be considered 'read-only'"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class bsh:LastKnownValueShape ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Status ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Status .
+
+brick:Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures temperature: the physical property of matter that quantitatively expresses the common notions of hot and cold"@en ;
+    sh:property [ a sh:PropertyShape ;
+            sh:class rec:TemperatureObservation ;
+            sh:maxCount 1 ;
+            sh:name "last known value" ;
+            sh:nodeKind sh:IRI ;
+            sh:path brick:lastKnownValue ] ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Sensor,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature .
+
+brick:Temperature_Setpoint a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Temperature Setpoint"@en ;
+    rdfs:subClassOf brick:Setpoint ;
+    skos:definition "Sets temperature"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Setpoint ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Setpoint,
+        tag:Temperature ;
+    brick:hasQuantity qudtqk:Temperature .
+
+brick:Valve_Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Valve Command"@en ;
+    rdfs:subClassOf brick:Command ;
+    skos:definition "Controls or reports the openness of a valve (typically as a proportion of its full range of motion)"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Valve ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Point,
+        tag:Valve .
+
+brick:Valve_Position_Command a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Valve Position Command"@en ;
+    rdfs:subClassOf brick:Position_Command,
+        brick:Valve_Command ;
+    skos:definition "Controls the position (the degree of openness) of a valve"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Command ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Position ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Valve ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Command,
+        tag:Point,
+        tag:Position,
+        tag:Valve ;
+    brick:hasQuantity brick:Position .
+
+brick:Valve_Position_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Valve Position Sensor"@en ;
+    rdfs:subClassOf brick:Position_Sensor ;
+    skos:definition "Measures the current position of a valve in terms of the percent of fully open"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Position ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Valve ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Position,
+        tag:Sensor,
+        tag:Valve ;
+    brick:hasQuantity brick:Position .
+
+brick:Zone_Air_Humidity_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Zone Air Humidity Sensor"@en ;
+    rdfs:subClassOf brick:Relative_Humidity_Sensor ;
+    skos:definition "Measures the relative humidity of zone air"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Humidity ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Relative ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Zone ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Humidity,
+        tag:Point,
+        tag:Relative,
+        tag:Sensor,
+        tag:Zone ;
+    brick:hasQuantity qudtqk:RelativeHumidity ;
+    brick:hasSubstance brick:Zone_Air .
+
+brick:Zone_Air_Temperature_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Zone Air Temperature Sensor"@en ;
+    rdfs:subClassOf brick:Air_Temperature_Sensor ;
+    skos:definition "A physical or virtual sensor which represents the temperature of an HVAC Zone"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Air ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Temperature ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Zone ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Air,
+        tag:Point,
+        tag:Sensor,
+        tag:Temperature,
+        tag:Zone ;
+    brick:hasQuantity qudtqk:Temperature ;
+    brick:hasSubstance brick:Zone_Air .
+
+brick:Zone_Air_Temperature_Setpoint a owl:Class ;
+    rdfs:label "Zone Air Temperature Setpoint"@en ;
+    rdfs:subClassOf brick:Air_Temperature_Setpoint ;
+    owl:deprecated true ;
+    skos:definition "Sets temperature of zone air"@en ;
+    brick:deprecatedInVersion "1.3.0" ;
+    brick:deprecationMitigationMessage "The class 'Zone_Air_Temperature_Setpoint' is deprecated in favor of more explicit class names to distinguish target and cooling/heating setpoints." ;
+    brick:isReplacedBy brick:Target_Zone_Air_Temperature_Setpoint .
+
+brick:Zone_CO2_Level_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Zone CO2 Level Sensor"@en ;
+    rdfs:subClassOf brick:CO2_Level_Sensor ;
+    skos:definition "A physical or virtual sensor which represents the CO2 level of an HVAC Zone"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:CO2 ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Level ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Sensor ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Zone ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:CO2,
+        tag:Level,
+        tag:Point,
+        tag:Sensor,
+        tag:Zone ;
+    brick:hasQuantity brick:CO2_Concentration ;
+    brick:hasSubstance brick:Air .
+
+brick:Equipment a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Equipment"@en ;
+    rdfs:subClassOf brick:Class,
+        brick:Entity ;
+    brick:hasAssociatedTag tag:Equipment .
+
+brick:HVAC_Equipment a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "HVAC Equipment"@en ;
+    rdfs:subClassOf brick:Equipment ;
+    brick:hasAssociatedTag tag:Equipment,
+        tag:HVAC .
+
+brick:Air_Handling_Unit a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Air Handling Unit"@en ;
+    rdfs:subClassOf brick:Equipment ;
+    brick:hasAssociatedTag tag:AHU,
+        tag:Air,
+        tag:Equipment,
+        tag:Handler,
+        tag:Handling,
+        tag:Unit .
+
+brick:Terminal_Unit a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Terminal Unit"@en ;
+    rdfs:subClassOf brick:HVAC_Equipment ;
+    brick:hasAssociatedTag tag:Equipment,
+        tag:Terminal,
+        tag:Unit .
+
+brick:Variable_Air_Volume_Box a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Variable Air Volume Box"@en ;
+    rdfs:subClassOf brick:Terminal_Unit ;
+    brick:hasAssociatedTag tag:Box,
+        tag:Equipment,
+        tag:VAV,
+        tag:Variable,
+        tag:Volume .
+
+brick:Fault_Status a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Fault Status"@en ;
+    rdfs:subClassOf brick:Status ;
+    skos:definition "Indicates the presence of a fault in a device, system or control loop"@en ;
+    sh:rule [ a sh:TripleRule ;
+            sh:object tag:Fault ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Point ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ],
+        [ a sh:TripleRule ;
+            sh:object tag:Status ;
+            sh:predicate brick:hasTag ;
+            sh:subject sh:this ] ;
+    brick:hasAssociatedTag tag:Fault,
+        tag:Point,
+        tag:Status .
+
+brick:Power_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Power Sensor"@en ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures the amount of instantaneous power consumed"@en .
+
+brick:Electric_Power_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Electric Power Sensor"@en ;
+    rdfs:subClassOf brick:Power_Sensor ;
+    skos:definition "Measures the amount of instantaneous electric power consumed"@en .
+
+brick:Energy_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Energy Sensor"@en ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures energy consumption"@en .
+
+brick:Electric_Energy_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Electric Energy Sensor"@en ;
+    rdfs:subClassOf brick:Energy_Sensor .
+
+brick:Meter a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Meter"@en ;
+    rdfs:subClassOf brick:Equipment ;
+    skos:definition "A device that measure usage or consumption of some media --- typically a form energy or power."@en .
+
+brick:Electrical_Meter a owl:Class,
+        sh:NodeShape ;
+    rdfs:label "Electrical Meter"@en ;
+    rdfs:subClassOf brick:Meter ;
+    skos:definition "A meter that measures the usage or consumption of electricity"@en .
+
+brick:Chiller a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:HVAC_Equipment ;
+    skos:definition "Refrigerating machine used to transfer heat between fluids. Chillers are either direct expansion with a compressor or absorption type."@en .
+
+brick:Water_Heater a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Equipment ;
+    skos:definition "An apparatus for heating and usually storing hot water"@en .
+
+brick:Boiler a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:HVAC_Equipment,
+        brick:Water_Heater ;
+    skos:definition "A closed, pressure vessel that uses fuel or electricity for heating water or other fluids to supply steam or hot water for heating, humidification, or other applications."@en .
+
+brick:Pump a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:HVAC_Equipment ;
+    skos:definition "Machine for imparting energy to a fluid, causing it to do work, drawing a fluid into itself through an entrance port, and forcing the fluid out through an exhaust port."@en .
+
+brick:Fan a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:HVAC_Equipment ;
+    skos:definition "Any device with two or more blades or vanes attached to a rotating shaft used to produce an airflow for the purpose of comfort, ventilation, exhaust, heating, cooling, or any other gaseous transport."@en .
+
+brick:Exhaust_Fan a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Fan ;
+    skos:definition "Fan moving exhaust air -- air that must be removed from a space due to contaminants"@en .
+
+# Site/Building/Floor/Zone are real, currently-published Brick classes but
+# owl:deprecated as of Brick 1.4 (isReplacedBy rec:Site/rec:Building/
+# rec:Level/rec:Zone respectively) - kept here anyway since this project
+# uses them for its spatial hierarchy (see scripts/seed_derivations_and_
+# faults.py's seed_spatial_hierarchy) rather than adopting a second
+# ontology namespace. Still real, not invented - just not the newest name.
+brick:Location a owl:Class,
+        sh:NodeShape .
+
+brick:Site a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Location ;
+    skos:definition "A geographic region containing 0 or more buildings. Typically used as the encapsulating location for a collection of Brick entities through the hasPart/isPartOf relationships"@en .
+
+brick:Building a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Location ;
+    skos:definition "An independent unit of the built environment with a characteristic spatial structure, intended to serve at least one function or user activity [ISO 12006-2:2013]"@en .
+
+brick:Floor a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Location ;
+    skos:definition "A level, typically representing a horizontal aggregation of spaces that are vertically bound. (referring to IFC)"@en .
+
+brick:Zone a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Location ;
+    skos:definition "(1) a separately controlled heated or cooled space. (2) one occupied space or several occupied spaces with similar occupancy category, occupant density, zone air distribution effectiveness, and zone primary airflow per unit area. (3) space or group of spaces within a building for which the heating, cooling, or lighting requirements are sufficiently similar that desired conditions can be maintained throughout by a single controlling device."@en .

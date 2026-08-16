@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.env
+gateway/*.htpasswd
+
+docs-site/node_modules/
+docs-site/dist/

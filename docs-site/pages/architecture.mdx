@@ -1,0 +1,220 @@
+---
+title: Architecture
+---
+
+Timberdoodle is twelve containers under one `docker-compose.yml`: five
+infrastructure services, six daemons (one shared Docker image, a
+different `command:` each), and an nginx gateway in front of the three
+HTTP APIs. `docker compose up -d` starts all of it. Nothing here is
+guessed — this is the real `docker-compose.yml` and the real CLI entry
+points.
+
+### Ingest path
+
+<Mermaid chart={`graph LR
+    FBF["FBF (BACnet/Modbus)"] -->|"MQTT fbf/#"| MQ[(mosquitto)]
+    PUSH["push-style sources"] -->|"POST /ingest/ingest"| GW
+
+    GW["gateway (nginx :8080)"] --> IA
+    ML["mqtt_listener"] -->|subscribes fbf/#| MQ
+    IA["ingest_api :8000"]
+    ML --> OX[(oxigraph)]
+    ML --> PG[(postgres/timescale)]
+    IA --> OX
+    IA --> PG
+`} />
+
+### Fault & derivation pipelines
+
+<Mermaid chart={`graph LR
+    GW["gateway (nginx :8080)"] --> FA
+    GW --> DA
+    FA["fault_api :8002"] -->|CRUD| FCFG[("rules.json /\\nwebhooks.json")]
+    FA -->|"GET /faults"| PG[(postgres/timescale)]
+    FD["fault_detector"] -->|Cur mode| MQ[(mosquitto)]
+    FD -->|"His mode, periodic sweep"| PG
+    FD -->|reads| FCFG
+    FD -->|"fault open/resolve"| WH(("webhook URLs"))
+
+    DA["derivation_api :8003"] -->|CRUD| DCFG[("derivations.json")]
+    DE["derivation_engine"] -->|cur-mode| MQ
+    DE -->|"sweep + rollups"| PG
+    DE -->|"lineage triples"| OX[(oxigraph)]
+    DE -->|reads| DCFG
+
+    UI["ui/ (static, gateway /ui/)"] --> GW
+`} />
+
+## The gateway
+
+An `nginx:alpine` container (`gateway/nginx.conf`) is the one thing
+external callers talk to — `localhost:8080`. It does two jobs:
+
+- **Path routing**, so callers don't need to know three separate ports:
+  `/ingest/*` → `ingest_api:8000`, `/fault/*` → `fault_api:8002`,
+  `/derivation/*` → `derivation_api:8003`. It also serves the static
+  demo UI at `/ui/` directly (an nginx `alias` onto `./ui/`, not a fourth
+  process). The three API containers no longer publish host ports at
+  all — the gateway is the only way in from outside the Docker network.
+- **HTTP basic auth, split by method** via nginx's `limit_except GET`:
+  `GET` requests check against `gateway/read.htpasswd`; everything else
+  (`POST`/`DELETE` — the mutating calls, including the derivation API's
+  code-exec endpoints) additionally checks `gateway/write.htpasswd`. A
+  write credential doesn't automatically satisfy the read check — they're
+  separate files by design. Both are gitignored; generate your own with
+  `htpasswd -bc` (see the repo's README quick start).
+
+This is deliberately *not* a merge of the three API processes into one
+codebase — they stay separate builds/images/restarts, same as before,
+consistent with the decoupling described throughout this page. The
+gateway only changes how they're reached from outside.
+
+One caveat worth knowing: `proxy_pass` targets resolve once at nginx
+startup and stay cached. If a single backend container is recreated
+independently (not the whole stack via `docker compose up -d`), restart
+the gateway too (`docker compose restart gateway`) so it picks up the new
+address — see the `ponytail:` comment in `gateway/nginx.conf`.
+
+The gateway's auth is a checkpoint at the network edge, not a fix for
+what's behind it — the derivation API's code-exec sandbox is still only
+defense in depth (see below), and `fault_api.py`'s webhook URLs still
+have [no SSRF protection](/webhooks#no-ssrf-protection-in-v1). Both
+warnings stand exactly as documented; the gateway just means something
+external now has to authenticate before it can reach either.
+
+## Infrastructure (docker-compose)
+
+| Service | Image | Purpose | Port(s) |
+|---|---|---|---|
+| `mosquitto` | `eclipse-mosquitto:2` | MQTT broker every source and every consumer shares. | 1883 |
+| `oxigraph` | `ghcr.io/oxigraph/oxigraph:latest` | RDF/SPARQL graph store — entity identity, tags, relationships. | 7878 |
+| `postgres` | `timescale/timescaledb:latest-pg16` | Timescale hypertable, `point_history` — the actual reading values. | 5433 → 5432 in-container |
+| `jaeger` | `jaegertracing/all-in-one:latest` | Trace collection/UI. Every process below exports here. | 16686 (UI), 4318 (OTLP HTTP) |
+| `grafana` | `grafana/grafana-oss:latest` | Dashboards over Postgres, anonymous admin enabled for local dev. | 3033 → 3000 in-container |
+| `gateway` | `nginx:alpine` | Basic-auth-gated path router in front of the three HTTP APIs, plus the static UI. | 8080 |
+
+Postgres is deliberately remapped to host port 5433 rather than the
+default 5432, to avoid colliding with a locally-running Postgres
+instance — easy to miss if you're connecting a client by hand. Its
+password comes from `POSTGRES_PASSWORD` in `.env` (falls back to
+`timberdoodle` if unset) rather than being hardcoded in
+`docker-compose.yml`.
+
+## Why two stores, not one
+
+Time-series values and graph/entity data have genuinely different access
+patterns, so they live in genuinely different systems rather than one
+database wearing two hats:
+
+- **Postgres/TimescaleDB** for `point_history` — because the natural
+  consumer of a time-series (Grafana, or literally anything that speaks
+  SQL) should be able to read it with zero custom connector or plugin.
+- **Oxigraph** for entity identity, Haystack tags, and Brick
+  relationships — because the graph doesn't know or care which ontology
+  (Brick, Haystack, DBO) it's loaded with. That's a load-time choice
+  (`store.load_ontology`), not a schema baked into the code — the whole
+  point of being "ontology-agnostic."
+
+## The six daemons
+
+All six now build from one root `Dockerfile` (a single `pip install -e .`
+image, editable so the `__file__`-relative paths each API uses to find
+its own OpenAPI spec keep resolving the same way they do outside Docker)
+and run as `docker-compose.yml` services, each with the same image and a
+different `command:`. They reach the infra containers above by
+Docker-network service name rather than `localhost`, via three env vars
+(`TIMBERDOODLE_PG_DSN`, `OXIGRAPH_URL`, `MQTT_HOST` — see the
+`x-daemon-env` anchor in `docker-compose.yml`), each read with a
+`localhost`-pointing fallback in the code
+(`timeseries.DEFAULT_DSN`, `RemoteStore.__init__`, and the `--mqtt-host`/
+`--oxigraph-url` CLI flag defaults) — so nothing changes for anyone still
+running a process bare-metal outside Docker.
+
+| Process | Reads from | Writes to | Port |
+|---|---|---|---|
+| `mqtt_listener.py` | mosquitto (`fbf/#`) | oxigraph, postgres | — |
+| `ingest_api.py` | HTTP `POST /ingest` | oxigraph, postgres | 8000 |
+| `fault_api.py` | HTTP CRUD | `rules.json`/`webhooks.json`, postgres (`GET /faults`) | 8002 |
+| `fault_detector.py` | mosquitto (Cur), postgres (His, periodic sweep) | postgres (`faults` table), outbound webhooks | — |
+| `derivation_api.py` | HTTP CRUD, `POST /derivations/test`, `/dry-run` | `derivations.json`, postgres (health) | 8003 |
+| `derivation_engine.py` | mosquitto (cur-mode), postgres (sweep, His inputs), oxigraph (SPARQL select) | postgres (`point_history`), oxigraph (lineage triples) | — |
+
+Each daemon's container bind-mounts the repo root (`.:/app`) so
+`rules.json`/`webhooks.json`/`derivations.json` — read/written by these
+processes at their default relative paths — are the same files on disk
+whether a process is running in Docker or bare-metal; there's no separate
+in-container copy to keep in sync. Postgres startup is the one real
+ordering hazard (a daemon connecting before Postgres accepts connections
+would just crash), so `postgres` has a `pg_isready` healthcheck and every
+daemon `depends_on` it with `condition: service_healthy`; oxigraph and
+mosquitto start fast enough in practice not to need the same treatment.
+
+Plus two one-shot tools that aren't daemons at all: `autotag.py` (rule
+engine + LLM-fallback sweep that proposes new mapping rules, never edits
+the live rule set) and the static `ui/` — served both by the gateway at
+`/ui/` (no separate process) and, standalone, by
+`python -m timberdoodle.ui_server` on `:8004` for anyone not going
+through Docker. Either way it talks to `derivation_api.py`/`fault_api.py`
+over HTTP from the browser; through the gateway that's same-origin
+(`/ingest`, `/fault`, `/derivation`), so the browser's native basic-auth
+prompt covers it with no credential-handling code in `ui/app.js` itself.
+
+`mqtt_listener.py` and `ingest_api.py` are two front doors onto the exact
+same `ingest_reading()` code path — a source can push over HTTP or
+publish over MQTT and it behaves identically, because point identity is
+just the topic string (`urn:point:{topic}`).
+
+<Mermaid chart={`sequenceDiagram
+    participant Src as Source (MQTT or push client)
+    participant ML as mqtt_listener.py
+    participant IA as ingest_api.py
+    participant Ing as ingest.ingest_reading()
+    participant OX as oxigraph
+    participant PG as postgres
+
+    alt over MQTT
+        Src->>ML: publish fbf/# envelope
+        ML->>Ing: ingest_reading(envelope)
+    else over HTTP
+        Src->>IA: POST /ingest
+        IA->>Ing: ingest_reading(envelope)
+    end
+    Ing->>OX: link point/equip triples
+    Ing->>PG: write point_history row
+`} />
+
+`fault_api.py` and `fault_detector.py` are decoupled on purpose:
+`fault_api.py` only ever writes `rules.json`/`webhooks.json` and reads
+`faults` from Postgres; `fault_detector.py` is the only process that
+actually evaluates rules. They share nothing but those two config files —
+see [Fault Detection](/fault-detection) for why. Containerizing both
+didn't change that — they're still two separate services/images/restarts
+in `docker-compose.yml`, just no longer manually started.
+
+`derivation_api.py` and `derivation_engine.py` follow the identical
+shape: the API only ever writes `derivations.json` (plus per-target
+health in Postgres) and the engine is the only process that evaluates
+derivations, sharing nothing but that one config file.
+
+## Why stdlib `http.server`, not a framework
+
+`ingest_api.py`, `fault_api.py`, and `derivation_api.py` are all built on
+Python's stdlib `http.server.ThreadingHTTPServer` rather than
+Flask/FastAPI/etc. None of them is more than a handful of routes — a
+framework dependency for that is a cost with no payoff here. Each request
+gets its own Postgres connection from a pool
+(`timeseries.connect_pool()`), not one shared connection across threads —
+`psycopg.Connection` isn't safe for concurrent multi-thread use, and a
+shared connection previously caused a silent, unrecoverable-without-restart
+failure in `ingest_api.py`.
+
+## Tracing
+
+Every process calls `tracing.init_tracing(<service_name>)` on startup and
+gets a real OpenTelemetry span around every nontrivial operation — not a
+log line. This was a direct response to a multi-hour debugging session
+where a silent failure had zero visible signal. All six processes export
+to Jaeger's OTLP HTTP endpoint — `jaeger:4318` inside Docker,
+`localhost:4318` outside it, both by the same
+`OTEL_EXPORTER_OTLP_ENDPOINT` override mechanism; view traces at
+`localhost:16686`.

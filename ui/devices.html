@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Timberdoodle — Devices</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="devices.css" />
+</head>
+<body>
+  <header>
+    <h1>Devices</h1>
+    <span id="status">connecting…</span>
+    <nav class="top-nav"><a href="index.html">← Equipment tree</a></nav>
+  </header>
+  <main id="devices-main">
+    <section>
+      <h2>Discovered devices <span class="hint">(from FBF's periodic BACnet Who-Is scan and, if configured, Modbus subnet sweeps)</span></h2>
+      <table id="devices-table">
+        <thead>
+          <tr>
+            <th>Protocol</th><th>Address</th><th>Vendor / product</th><th>Status</th>
+            <th>Last seen</th><th>Credential</th><th>Default-credential check</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Provisioned BACnet connections</h2>
+      <table id="connections-table">
+        <thead><tr><th>Device</th><th>Topic prefix</th><th>Points</th><th>Credential</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Provisioned Modbus connections</h2>
+      <table id="modbus-connections-table">
+        <thead><tr><th>Host:port</th><th>Topic prefix</th><th>Points</th><th>Credential</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <dialog id="provision-dialog">
+      <form method="dialog" id="provision-form">
+        <h2 id="provision-title">Create connection</h2>
+        <div id="provision-fields"></div>
+        <menu>
+          <button type="submit" value="create">Create</button>
+          <button type="button" value="cancel" id="provision-cancel">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="credential-dialog">
+      <form method="dialog" id="credential-form">
+        <h2>Set credential</h2>
+        <p class="hint">Shown once, right after you set it. Every later listing redacts the password.</p>
+        <label>Username <input type="text" id="credential-username" required /></label>
+        <label>Password <input type="password" id="credential-password" required /></label>
+        <menu>
+          <button type="submit" value="save">Save</button>
+          <button type="button" value="cancel" id="credential-cancel">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+  </main>
+  <script src="devices.js"></script>
+</body>
+</html>

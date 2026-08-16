@@ -1,0 +1,28 @@
+//
+// his - Timberdoodle history provider for Haxall. Named "his" (not a
+// namespaced "td.his") so it wins RuntimeExts.getByType's alphabetical
+// tie-break against the boot lib "hx.hxd.his" - see build.fan's comment.
+//
+
+pragma: Lib <
+  doc: "Timberdoodle history provider"
+  version: BuildVar "hx.version"
+  depends: {
+    { lib: "sys", versions: BuildVar "ph.depend" }
+    { lib: "hx",  versions: BuildVar "hx.depend" }
+  }
+  categories: {"haxall"}
+  license: BuildVar "hx.license"
+  org: {
+   dis: BuildVar "hx.org.dis"
+   uri: BuildVar "hx.org.uri"
+  }
+  vcs: {
+    type: BuildVar "hx.vcs.type"
+    uri:  BuildVar "hx.vcs.uri"
+  }
+  libExt: TimberdoodleHisExt
+>
+
+// Timberdoodle history provider - see TimberdoodleHisExt.fan
+TimberdoodleHisExt: Ext

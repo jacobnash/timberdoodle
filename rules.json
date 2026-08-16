@@ -1,0 +1,44 @@
+[
+  {
+    "id": "6ea9e814683440a6ae4890699c59f89c",
+    "name": "zone-temp-out-of-range",
+    "mode": "cur",
+    "type": "range",
+    "applies_to": {
+      "brick_class": "Zone_Air_Temperature_Sensor"
+    },
+    "min": 60.0,
+    "max": 80.0
+  },
+  {
+    "id": "1eb15783c83c4d95bf1979d4a7c13b24",
+    "name": "stuck-damper-position",
+    "mode": "his",
+    "type": "stuck",
+    "applies_to": {
+      "brick_class": "Damper_Position_Sensor"
+    },
+    "stuck_seconds": 120
+  },
+  {
+    "id": "43b769aae97d45d7b0258f82f0e20b9c",
+    "name": "discharge-air-temp-out-of-range",
+    "mode": "cur",
+    "type": "range",
+    "applies_to": {
+      "brick_class": "Discharge_Air_Temperature_Sensor"
+    },
+    "min": 50.0,
+    "max": 70.0
+  },
+  {
+    "id": "999cfb7c498243b6b1156e218a1b6111",
+    "name": "stale-ahu-points",
+    "mode": "his",
+    "type": "stale",
+    "applies_to": {
+      "topic_glob": "fbf/ahu-*/*"
+    },
+    "max_age_seconds": 120
+  }
+]

@@ -1,0 +1,64 @@
+---
+title: Webhooks
+---
+
+Register a webhook via [`POST /webhooks`](/api/fault) and
+`fault_detector.py` will POST a JSON payload to it every time a fault
+opens or resolves. Delivery runs in its own daemon thread per event, off
+whichever thread detected the transition (the MQTT callback thread for
+Cur-mode rules, the main thread for the His-mode sweep) — a slow or dead
+webhook URL must never stall fault evaluation for every other point
+behind it.
+
+## Signing
+
+Every delivery carries an `X-Timberdoodle-Signature` header:
+`sha256={hmac-sha256 hex digest}`, keyed by the `secret` you supplied at
+registration. The critical detail if you're writing a receiver: **the
+signature is computed over the exact bytes sent on the wire**, not a
+re-serialization of the payload. The sender deliberately does
+`requests.post(..., data=body, ...)` rather than `json=payload`, because
+two independent `json.dumps()` calls on the same dict aren't guaranteed
+to produce byte-identical output (key ordering, float formatting). Your
+receiver has to make the same choice independently — verify the HMAC
+against the **raw request body as received**, then parse it, not the
+other way around. Verifying against a re-serialized copy is a common,
+subtle signature-verification bug this design avoids on the sending side,
+but only if the receiving side gets it right too.
+
+## Retries and failure handling
+
+`deliver()` retries up to 3 times with exponential backoff (no wait, then
+1s, then 2s) and a 5-second timeout per attempt. Any non-2xx response
+counts as a failure — there's no distinction between "transient, worth
+retrying" and "permanently dead, retrying is pointless." After **5
+consecutive failures**, a webhook is automatically disabled
+(`disabled=true` in Postgres) and stays that way until a human calls
+`enable_webhook` — there's no scheduled re-enable. If a webhook seems to
+have gone silent, check whether it's been auto-disabled before assuming
+nothing is faulting.
+
+## Filtering
+
+`filter: { "rule_id": "..." }` scopes a webhook to one rule's events.
+Omit or set `filter: null` to receive every fault transition from every
+rule. There's currently no OR-list or point-level filtering — if you need
+a webhook that only cares about a subset of rules, register one webhook
+per rule rather than expecting a single registration to filter across
+several.
+
+## No SSRF protection in v1
+
+`url` is fetched directly by `fault_detector.py`, with no restriction on
+target address. A registered webhook could target internal
+infrastructure — `localhost:5433` (Postgres), `oxigraph:7878` — and
+nothing in this API stops it. This is an accepted, documented gap
+appropriate for the single-trusted-operator, localhost-docker-compose
+deployment this project targets today, not an oversight. **Do not expose
+`fault_api.py` to untrusted callers.**
+
+The [gateway's basic auth](/architecture#the-gateway) doesn't change
+this — it's a checkpoint at the network edge for whoever can reach
+`POST /fault/webhooks` at all, not a fix for what a trusted, authenticated
+caller can point a webhook at once they're through. Anyone with write
+credentials still has the same SSRF surface described above.

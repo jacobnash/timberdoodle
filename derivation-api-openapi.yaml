@@ -1,0 +1,429 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Derivation API
+  version: "1.0.0"
+  description: |
+    CRUD for derivations - definitions of synthetic/computed histories,
+    Timberdoodle's answer to SkySpark's rule engine. A derivation names a
+    SPARQL query that selects what to run over and a Python function (the
+    "lambda") that computes the value; the result is written back as a new
+    point in `point_history` and attached to its target entity in the
+    ontology, with full `prov:wasDerivedFrom` lineage to its inputs.
+
+    This is a separate process/port from the ingest API (`ingest_api.py`,
+    `openapi.yaml`) and the fault API (`fault_api.py`,
+    `fault-api-openapi.yaml`) - each API's spec is served by the process it
+    actually describes.
+
+    The actual evaluation (running derivations on a sweep and, for
+    cur-mode derivations, on matching MQTT messages) happens in a separate
+    process, `derivation_engine.py`, which reads the same `derivations.json`
+    file this API writes - there's no direct connection between this API
+    and the engine beyond that shared config.
+
+    **Security: `POST /derivations`, `POST /derivations/test`, and
+    `POST /derivations/dry-run` execute submitted Python.** `fn_source` is
+    compiled and run through a restricted sandbox (AST denylist blocking
+    imports, `eval`/`exec`/`__import__`/dunder-attribute access, plus a
+    builtins allowlist, plus a wall-clock timeout) - this is defense in
+    depth, **not a hard isolation boundary**. Only OS-level isolation
+    (a subprocess or container per execution) would be that, and it's out
+    of scope for v1. Do not expose this API to untrusted callers or past a
+    fully trusted, localhost-only deployment boundary - the same posture
+    `fault-api-openapi.yaml` already documents for webhook URLs, one notch
+    more dangerous (arbitrary code execution, not SSRF).
+servers:
+  - url: http://localhost:8080/derivation
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path. GET requests need HTTP basic auth against
+      gateway/read.htpasswd; POST/DELETE (including the code-exec
+      endpoints this API warns about above) additionally need
+      gateway/write.htpasswd. The gateway is a checkpoint at the network
+      edge, not a substitute for the localhost-only posture above -
+      don't expose it past that boundary either.
+  - url: http://localhost:8003
+    description: >-
+      Direct - only reachable if you're running this process bare-metal
+      (`python -m timberdoodle.derivation_api --help`) or from inside the
+      Docker network. docker-compose.yml does not publish this port to
+      the host, so this URL will refuse connections in the normal
+      containerized setup.
+tags:
+  - name: Derivations
+    description: Define what gets computed, from what, and how.
+  - name: Targets
+    description: Per-(derivation, target) failure isolation - a target that keeps throwing uncaught exceptions gets auto-disabled.
+paths:
+  /derivations:
+    post:
+      operationId: createDerivation
+      tags: [Derivations]
+      summary: Create a derivation
+      description: |
+        `kind` is `"formula"` (default - a SPARQL `select` binds a target
+        and named `input_vars`, one function call per matched row) or
+        `"rollup"` (a `root_select` binds one or more root entities; the
+        engine walks a `part_relationship` tree under each root, computing
+        a value at every node bottom-up from its own `leaf_point_class`
+        points plus its already-computed children).
+
+        `fn_source` must define `def run(inputs, row): ...` returning a
+        number or `None` ("no result this pass" - nothing is written).
+        `test_cases` is required and non-empty: every case is run through
+        the compiled function before the derivation is persisted, and any
+        compile failure or expected/actual mismatch is a `400` naming
+        exactly which case failed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDerivationRequest"
+            examples:
+              formula:
+                summary: Average two named zone-temp points
+                value:
+                  name: effective-zone-temp
+                  kind: formula
+                  select: "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?target ?zoneTemp1 ?zoneTemp2 WHERE { ?target brick:hasPoint ?zoneTemp1, ?zoneTemp2 . ?zoneTemp1 a brick:Zone_Air_Temperature_Sensor . ?zoneTemp2 a brick:Zone_Air_Temperature_Sensor . FILTER(?zoneTemp1 != ?zoneTemp2) }"
+                  target_var: target
+                  input_vars: [zoneTemp1, zoneTemp2]
+                  window_seconds: 3600
+                  fn_source: "def run(inputs, row):\n    vals = [v for s in inputs.values() for _, v in s[-1:]]\n    return sum(vals) / len(vals) if vals else None"
+                  test_cases:
+                    - inputs: { zoneTemp1: [["2026-01-01T00:00:00Z", 70.0]], zoneTemp2: [["2026-01-01T00:00:00Z", 74.0]] }
+                      row: {}
+                      expected: 72.0
+                  output: { brick_class: Effective_Zone_Air_Temperature_Sensor, unit: "°F" }
+                  depends_on: []
+              rollup:
+                summary: Sum every meter under every campus, at every level
+                value:
+                  name: meter-total-rollup
+                  kind: rollup
+                  root_select: "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?root WHERE { ?root a brick:Campus }"
+                  part_relationship: "brick:hasPart"
+                  leaf_point_class: "brick:Meter"
+                  window_seconds: 3600
+                  fn_source: "def run(inputs, row):\n    vals = [s[-1][1] for s in inputs if s]\n    return sum(vals) if vals else None"
+                  test_cases:
+                    - inputs: [[["2026-01-01T00:00:00Z", 10.0]], [["2026-01-01T00:00:00Z", 15.0]]]
+                      row: {}
+                      expected: 25.0
+                  output: { unit: kWh }
+                  depends_on: []
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Derivation"
+        "400":
+          description: Malformed body, missing/empty test_cases, a fn_source that doesn't compile in the sandbox, or a failing test case.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      operationId: listDerivations
+      tags: [Derivations]
+      summary: List every configured derivation
+      responses:
+        "200":
+          description: Every derivation, as a JSON array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Derivation"
+  /derivations/{id}:
+    delete:
+      operationId: deleteDerivation
+      tags: [Derivations]
+      summary: Delete a derivation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted. No response body.
+        "404":
+          description: No derivation with that id.
+  /derivations/test:
+    post:
+      operationId: testDerivation
+      tags: [Derivations]
+      summary: Validate fn_source against test_cases without persisting anything
+      description: Same compile-and-run-test_cases path as POST /derivations, stateless - for iterating on a derivation before creating it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fn_source, test_cases]
+              properties:
+                fn_source:
+                  type: string
+                test_cases:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TestCase"
+      responses:
+        "200":
+          description: Per-case pass/fail, actual vs. expected.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TestCaseResult"
+        "400":
+          description: fn_source doesn't compile in the sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /derivations/dry-run:
+    post:
+      operationId: dryRunDerivation
+      tags: [Derivations]
+      summary: Run a derivation against live data without writing anything
+      description: |
+        Runs the full pipeline (SPARQL select/root_select against the real
+        ontology, real point_history reads, the sandboxed function call)
+        exactly as a real sweep would, but skips every mutating call
+        (point_history writes, graph writes, target-health updates) and
+        returns a step-by-step trace instead. Pass `{"id": "<existing id>"}`
+        to dry-run a saved derivation, or a full draft derivation body
+        (same shape as POST /derivations, `test_cases` optional here) to
+        try one out before creating it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [id]
+                  properties:
+                    id:
+                      type: string
+                - $ref: "#/components/schemas/CreateDerivationRequest"
+      responses:
+        "200":
+          description: One trace entry per evaluated target.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TraceEntry"
+        "400":
+          description: Unknown id, or a draft fn_source that doesn't compile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /derivations/{id}/targets:
+    get:
+      operationId: listDerivationTargets
+      tags: [Targets]
+      summary: Per-target failure-isolation status for one derivation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Every target this derivation has ever evaluated, most recently seen state.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TargetHealth"
+  /derivations/{id}/targets/{target}/enable:
+    post:
+      operationId: enableDerivationTarget
+      tags: [Targets]
+      summary: Clear a target's disabled state and failure count
+      description: target must be URL-encoded (it's a full URI, e.g. urn:equip:fbf/ahu-3).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: target
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Re-enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetHealth"
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: This document
+      description: Served raw, straight off disk - the same file you're reading right now.
+      responses:
+        "200":
+          description: The OpenAPI 3.1 spec for this API, as YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    TestCase:
+      type: object
+      required: [inputs, expected]
+      properties:
+        inputs:
+          description: dict[var_name, series] for formula derivations; list[series] for rollup derivations. Each series is a list of [iso8601-timestamp, value] pairs.
+        row:
+          type: object
+          description: 'Extra bound SPARQL variables (formula) or {"node": "<uri>"} (rollup). Defaults to {}.'
+        expected:
+          description: The value run(inputs, row) must return for this case to pass.
+    TestCaseResult:
+      type: object
+      required: [passed, actual, expected]
+      properties:
+        passed:
+          type: boolean
+        actual:
+          description: What run() actually returned, or null if it errored.
+        expected: {}
+        error:
+          type: ["string", "null"]
+    CreateDerivationRequest:
+      type: object
+      required: [name, fn_source, test_cases]
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [formula, rollup]
+          default: formula
+        select:
+          type: string
+          description: formula only. SPARQL SELECT binding target_var and every name in input_vars/extra_vars.
+        target_var:
+          type: string
+          description: formula only.
+        input_vars:
+          type: array
+          items:
+            type: string
+          description: formula only. Bound to fn's `inputs` dict, each read as a point history series.
+        extra_vars:
+          type: array
+          items:
+            type: string
+          description: formula only. Bound SPARQL variables passed through to fn's `row` as raw values, not read as point histories (e.g. a threshold literal).
+        input_windows:
+          type: object
+          description: formula only. Per-input_var override of window_seconds, for mixing points with very different update cadences.
+          additionalProperties:
+            type: number
+        root_select:
+          type: string
+          description: rollup only. SPARQL SELECT binding ?root, one row per top-level entity to roll up.
+        part_relationship:
+          type: string
+          description: "rollup only. Parent->child predicate CURIE to walk, e.g. brick:hasPart."
+        leaf_point_class:
+          type: string
+          description: "rollup only. Brick class CURIE identifying which directly-attached points at any tree node count as leaf inputs, e.g. brick:Meter."
+        window_seconds:
+          type: number
+          default: 3600
+        interval_seconds:
+          type: ["number", "null"]
+          description: Overrides the engine's default sweep tick for this derivation only.
+        applies_to_topic_glob:
+          type: ["string", "null"]
+          description: formula only. When set, an incoming MQTT message matching this glob triggers an immediate targeted re-evaluation in addition to the periodic sweep.
+        fn_source:
+          type: string
+          description: "Python source defining def run(inputs, row): ... Executed in a restricted sandbox - see this document's security note."
+        test_cases:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TestCase"
+        output:
+          type: object
+          properties:
+            brick_class:
+              type: ["string", "null"]
+            unit:
+              type: ["string", "null"]
+            label:
+              type: ["string", "null"]
+        depends_on:
+          type: array
+          items:
+            type: string
+          description: Ids of other derivations that must be evaluated first in the same sweep.
+    Derivation:
+      allOf:
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+        - $ref: "#/components/schemas/CreateDerivationRequest"
+    TraceEntry:
+      type: object
+      required: [target]
+      properties:
+        derivation_id:
+          type: string
+        target:
+          type: string
+        computed_value: {}
+        would_write_uri:
+          type: string
+        would_attach_to:
+          type: string
+        would_derive_from:
+          type: array
+          items:
+            type: string
+        error:
+          type: string
+    TargetHealth:
+      type: object
+      required: [target_uri, consecutive_failures, disabled]
+      properties:
+        target_uri:
+          type: string
+        consecutive_failures:
+          type: integer
+        disabled:
+          type: boolean
+        last_error:
+          type: ["string", "null"]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
