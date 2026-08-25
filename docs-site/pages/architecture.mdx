@@ -15,38 +15,72 @@ correctly excludes it. See [Haystack Puller](/haystack-puller).
 
 ### Ingest path
 
-<Mermaid chart={`graph LR
-    FBF["FBF (BACnet/Modbus)"] -->|"MQTT fbf/#"| MQ[(mosquitto)]
-    PUSH["push-style sources"] -->|"POST /ingest/ingest"| GW
+Two front doors (BACnet/Modbus over MQTT, or a direct HTTP push), one
+shared write path into both stores:
 
-    GW["gateway (nginx :8080)"] --> IA
-    ML["mqtt_listener"] -->|subscribes fbf/#| MQ
-    IA["ingest_api :8000"]
-    ML --> OX[(oxigraph)]
-    ML --> PG[(postgres/timescale)]
+<Mermaid chart={`graph LR
+    subgraph Sources
+        FBF["FBF (BACnet/Modbus)"]
+        PUSH["push-style sources"]
+    end
+
+    subgraph Transport
+        MQ[(mosquitto)]
+        GW["gateway (nginx :8080)"]
+    end
+
+    subgraph Processors
+        ML["mqtt_listener"]
+        IA["ingest_api :8000"]
+    end
+
+    subgraph Stores
+        OX[(oxigraph)]
+        PG[(postgres/timescale)]
+    end
+
+    FBF -->|"MQTT fbf/#"| MQ
+    PUSH -->|"POST /ingest/ingest"| GW
+    MQ -->|"subscribes fbf/#"| ML
+    GW --> IA
+    ML --> OX
+    ML --> PG
     IA --> OX
     IA --> PG
 `} />
 
-### Fault & derivation pipelines
+### Fault pipeline
+
+`fault_api.py` and `fault_detector.py` are decoupled on purpose (see
+[Fault Detection](/fault-detection)) — they share nothing but
+`rules.json`/`webhooks.json`, drawn here as the one node both connect to,
+not as a direct edge between the two processes:
 
 <Mermaid chart={`graph LR
-    GW["gateway (nginx :8080)"] --> FA
-    GW --> DA
-    FA["fault_api :8002"] -->|CRUD| FCFG[("rules.json /\\nwebhooks.json")]
+    GW["gateway (nginx :8080)"] --> FA["fault_api :8002"]
+    FA -->|CRUD| FCFG[("rules.json /\\nwebhooks.json")]
     FA -->|"GET /faults"| PG[(postgres/timescale)]
-    FD["fault_detector"] -->|Cur mode| MQ[(mosquitto)]
-    FD -->|"His mode, periodic sweep"| PG
+
+    MQ[(mosquitto)] -->|"Cur mode"| FD["fault_detector"]
     FD -->|reads| FCFG
+    FD -->|"His mode, periodic sweep"| PG
     FD -->|"fault open/resolve"| WH(("webhook URLs"))
+`} />
 
-    DA["derivation_api :8003"] -->|CRUD| DCFG[("derivations.json")]
-    DE["derivation_engine"] -->|cur-mode| MQ
-    DE -->|"sweep + rollups"| PG
-    DE -->|"lineage triples"| OX[(oxigraph)]
+### Derivation pipeline
+
+Same shape as the fault pipeline, one config file apart: `derivation_api.py`
+only ever writes `derivations.json`; `derivation_engine.py` is the only
+process that evaluates one:
+
+<Mermaid chart={`graph LR
+    GW["gateway (nginx :8080)"] --> DA["derivation_api :8003"]
+    DA -->|CRUD| DCFG[("derivations.json")]
+
+    MQ[(mosquitto)] -->|"cur-mode"| DE["derivation_engine"]
     DE -->|reads| DCFG
-
-    UI["ui/ (static, gateway /ui/)"] --> GW
+    DE -->|"sweep + rollups"| PG[(postgres/timescale)]
+    DE -->|"lineage triples"| OX[(oxigraph)]
 `} />
 
 ## The gateway
