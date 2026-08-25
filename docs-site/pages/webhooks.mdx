@@ -34,9 +34,20 @@ counts as a failure — there's no distinction between "transient, worth
 retrying" and "permanently dead, retrying is pointless." After **5
 consecutive failures**, a webhook is automatically disabled
 (`disabled=true` in Postgres) and stays that way until a human calls
-`enable_webhook` — there's no scheduled re-enable. If a webhook seems to
-have gone silent, check whether it's been auto-disabled before assuming
-nothing is faulting.
+[`POST /webhooks/{id}/enable`](/api/fault) — there's no scheduled
+re-enable. If a webhook seems to have gone silent,
+[`GET /webhooks`](/api/fault) includes `disabled`, `consecutive_failures`,
+and `last_error` for every registered webhook — check those before
+assuming nothing is faulting. A webhook that's never had a delivery
+attempt shows `disabled: false`, `consecutive_failures: 0`,
+`last_error: null`.
+
+The 5-failure counter increments once per delivery *attempt* recorded by
+`fault_detector.py` — which is once per fault-transition *event*, not
+once per HTTP request. `deliver()` already retries a single event's
+delivery up to 3 times internally before reporting failure, so 5
+consecutive **events** (not 5 raw HTTP attempts, which could be as many
+as 15) is what actually trips the threshold.
 
 ## Filtering
 
@@ -47,18 +58,20 @@ a webhook that only cares about a subset of rules, register one webhook
 per rule rather than expecting a single registration to filter across
 several.
 
-## No SSRF protection in v1
+## SSRF protection
 
-`url` is fetched directly by `fault_detector.py`, with no restriction on
-target address. A registered webhook could target internal
-infrastructure — `localhost:5433` (Postgres), `oxigraph:7878` — and
-nothing in this API stops it. This is an accepted, documented gap
-appropriate for the single-trusted-operator, localhost-docker-compose
-deployment this project targets today, not an oversight. **Do not expose
-`fault_api.py` to untrusted callers.**
+`url` must use `https://` and resolve to a public, non-reserved address.
+`webhooks.validate_url()` rejects loopback, private (`10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`), link-local, reserved, and multicast
+targets — so a registered webhook can't point at internal infrastructure
+like `localhost:5433` (Postgres) or `oxigraph:7878`. This check runs
+twice: once at `POST /webhooks` registration (fail fast), and again on
+**every delivery attempt** in `deliver()` — a hostname that resolved to a
+public address at registration time could resolve to `127.0.0.1` by the
+time a retry fires (DNS rebinding), and only re-checking at send time
+actually closes that gap.
 
-The [gateway's basic auth](/architecture#the-gateway) doesn't change
-this — it's a checkpoint at the network edge for whoever can reach
-`POST /fault/webhooks` at all, not a fix for what a trusted, authenticated
-caller can point a webhook at once they're through. Anyone with write
-credentials still has the same SSRF surface described above.
+This is enforced regardless of who's calling — the
+[gateway's basic auth](/architecture#the-gateway) is a checkpoint at the
+network edge, not what makes this safe. Any caller who can reach
+`POST /fault/webhooks` gets the same validation.

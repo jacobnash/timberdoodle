@@ -111,7 +111,12 @@ def _deliver_and_record(webhook: dict, payload: dict) -> None:
     try:
         if is_webhook_disabled(conn, webhook["id"]):
             return
-        success, error = deliver(webhook["url"], webhook["secret"], payload)
+        # Deployment-level escape hatch, not per-webhook config - a webhook
+        # registered through fault_api.py can't opt itself out of the SSRF
+        # check (that would let a compromised/malicious registration bypass
+        # the whole point of it). Only ever set true for local dev/test.
+        allow_private = os.environ.get("TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS") == "1"
+        success, error = deliver(webhook["url"], webhook["secret"], payload, allow_private=allow_private)
         with tracer.start_as_current_span("fault_detector.webhook_delivery") as span:
             span.set_attribute("webhook_id", webhook["id"])
             span.set_attribute("success", success)

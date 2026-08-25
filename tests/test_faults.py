@@ -13,6 +13,7 @@ from timberdoodle.faults import (
     ensure_schema,
     is_webhook_disabled,
     list_faults,
+    list_webhook_health,
     open_fault,
     record_webhook_failure,
     record_webhook_success,
@@ -113,3 +114,18 @@ def test_enable_webhook_clears_disabled_state(conn):
 
     enable_webhook(conn, webhook_id)
     assert is_webhook_disabled(conn, webhook_id) is False
+
+
+def test_list_webhook_health_returns_every_webhook_keyed_by_id(conn):
+    record_webhook_failure(conn, "test-faults:webhook-4", "timeout", disable_threshold=5)
+    record_webhook_failure(conn, "test-faults:webhook-4", "timeout", disable_threshold=5)
+    for _ in range(5):
+        record_webhook_failure(conn, "test-faults:webhook-5", "refused", disable_threshold=5)
+
+    health = list_webhook_health(conn)
+
+    assert health["test-faults:webhook-4"] == {"disabled": False, "consecutive_failures": 2, "last_error": "timeout"}
+    assert health["test-faults:webhook-5"] == {"disabled": True, "consecutive_failures": 5, "last_error": "refused"}
+    # a webhook that's never recorded an attempt has no row - the caller
+    # (fault_api.py's GET /webhooks) is responsible for the not-in-dict default
+    assert "test-faults:never-attempted" not in health

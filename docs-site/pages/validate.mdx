@@ -1,0 +1,61 @@
+---
+title: SHACL validation
+---
+
+[`POST /validate`](/api/validate) checks the live entity graph (the
+Oxigraph store every ingest/tagging/derivation write lands in) against
+[Brick](https://brickschema.org)'s own SHACL shapes — a structural check,
+independent of `mapping.py`'s hand-curated
+`rules/haystack_to_brick.yaml` rule set, that catches classifications
+Brick itself considers invalid (not just "the class name exists").
+
+## What it checks against
+
+`ontology/Brick-only.ttl` is a vendored, pinned copy of Brick's `v1.4.4`
+release — the same file ships both the class hierarchy and every
+`sh:NodeShape`/`sh:PropertyShape` constraint Brick defines for its own
+classes. `validate_api.py` loads this once at startup (not per-request —
+it's ~1.5MB of Turtle).
+
+## Running it
+
+```bash
+curl -u <write-user>:<write-password> -X POST localhost:8080/validate/validate
+```
+
+Always validates the **current live** Oxigraph state — no request body.
+Returns `200` either way; conformance is data in the response, not an
+error status (same pattern as `derivation_api.py`'s `/dry-run`):
+
+```json
+{
+  "conforms": false,
+  "violations": [
+    { "focus_node": "urn:equip:...", "message": "...", "severity": "http://www.w3.org/ns/shacl#Violation" }
+  ]
+}
+```
+
+An empty `violations` list means every Brick-typed entity in the graph
+currently satisfies Brick's own shapes. This is genuinely possible to see
+go red on real data — it's checking against upstream Brick's authority,
+not this project's own (necessarily looser) classification rules.
+
+## Enabling it
+
+`validate_api` needs the `validate` extra installed
+(`pip install -e ".[validate]"`, or already baked into the Docker image
+via the Dockerfile) — `pyshacl` isn't a core dependency, since not every
+process needs validation capability. `docker compose up -d` starts
+`validate_api` along with everything else; it's not profile-gated.
+
+## What this doesn't check
+
+Only entities already typed with a Brick class are constrained by Brick's
+shapes — points still sitting as `TD:RawPoint`/`TD:UnmappedPoint`
+(nothing classified them yet) or `PROJ:*` fallback classes (no Brick
+equivalent exists) aren't checked against anything, since Brick's shapes
+don't apply to non-Brick types. This also means `derivation_engine.py`'s
+computed points (typed `TD:ComputedPoint`, not a Brick class) are outside
+this check entirely — see `todo/shacl-validation-and-service.md` for the
+full scoping rationale.

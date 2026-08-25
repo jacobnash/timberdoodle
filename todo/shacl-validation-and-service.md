@@ -1,8 +1,11 @@
 # SHACL validation against Brick's own shapes
 
-**Status: planned, not started.** Saved here instead of relying on Claude's per-conversation
-plan-file slot (`~/.claude/plans/*.md`), which gets overwritten on the next unrelated planning
-session — this is meant to survive that.
+**Status: implemented (2026-08-25)**, per the design below — `ontology/Brick-only.ttl`,
+`src/timberdoodle/shacl_validate.py`, `src/timberdoodle/validate_api.py` (port 8005),
+`tests/test_shacl_validate.py`, `tests/test_validate_openapi.py`. Kept as the design record;
+not deleted post-implementation. Originally saved here instead of relying on Claude's
+per-conversation plan-file slot (`~/.claude/plans/*.md`), which gets overwritten on the next
+unrelated planning session — this was meant to survive that, and did.
 
 ## Context
 

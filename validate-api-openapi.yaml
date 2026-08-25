@@ -1,0 +1,81 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Validate API
+  version: "1.0.0"
+  description: |
+    Structural validation of the live entity graph against Brick's own
+    SHACL shapes (vendored in `ontology/Brick-only.ttl`, v1.4.4). Separate
+    process/port from ingest/fault/derivation - this document is served
+    by the process it actually describes.
+
+    This checks whether the hand-curated `rules/haystack_to_brick.yaml`
+    classification (`mapping.classify_point`) produces structurally valid
+    Brick instances, per Brick's own authority - not whether the graph is
+    internally consistent by some other measure.
+servers:
+  - url: http://localhost:8080/validate
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path. POST needs gateway/write.htpasswd.
+  - url: http://localhost:8005
+    description: >-
+      Direct - only reachable if you're running this process bare-metal
+      or from inside the Docker network. docker-compose.yml does not
+      publish this port to the host in the normal containerized setup.
+tags:
+  - name: Validation
+    description: Check the live graph against Brick's SHACL shapes.
+paths:
+  /validate:
+    post:
+      operationId: validateGraph
+      tags: [Validation]
+      summary: Validate the live entity graph against Brick's SHACL shapes
+      description: >-
+        Always validates the *current live* Oxigraph state - no request
+        body. Returns `200` either way; conformance is data in the
+        response, not an error status (matching `derivation_api.py`'s
+        `/derivations/dry-run`).
+      responses:
+        "200":
+          description: The validation result, conforming or not.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResult"
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: This document
+      description: Served raw, straight off disk - the same file you're reading right now.
+      responses:
+        "200":
+          description: The OpenAPI 3.1 spec for this API, as YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    ValidationResult:
+      type: object
+      required: [conforms, violations]
+      properties:
+        conforms:
+          type: boolean
+        violations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Violation"
+    Violation:
+      type: object
+      required: [focus_node, message, severity]
+      properties:
+        focus_node:
+          type: string
+          description: The URI of the entity that failed a shape constraint.
+        message:
+          type: string
+        severity:
+          type: string
+          description: A SHACL severity URI, e.g. http://www.w3.org/ns/shacl#Violation.

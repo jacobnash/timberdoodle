@@ -15,8 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from timberdoodle import docs_ui, json_store, tracing
-from timberdoodle.faults import ensure_schema, list_faults
+from timberdoodle.faults import enable_webhook, ensure_schema, list_faults, list_webhook_health
 from timberdoodle.timeseries import connect_pool
+from timberdoodle.webhooks import validate_url
 
 tracer = tracing.get_tracer(__name__)
 
@@ -59,6 +60,10 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             if self.path == "/webhooks":
                 self._handle("api.post_webhooks", self._create_webhook)
                 return
+            if self.path.startswith("/webhooks/") and self.path.endswith("/enable"):
+                webhook_id = self.path[len("/webhooks/"):-len("/enable")]
+                self._handle("api.post_webhook_enable", lambda span: self._enable_webhook(webhook_id, span))
+                return
             self.send_response(404)
             self.end_headers()
 
@@ -68,7 +73,13 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
                 return
             if self.path == "/webhooks":
                 def handle(span):
-                    webhooks = [_redact_webhook(w) for w in json_store.load(webhooks_path)]
+                    with ts_pool.connection() as conn:
+                        health = list_webhook_health(conn)
+                    default_health = {"disabled": False, "consecutive_failures": 0, "last_error": None}
+                    webhooks = [
+                        {**_redact_webhook(w), **health.get(w["id"], default_health)}
+                        for w in json_store.load(webhooks_path)
+                    ]
                     _respond_json(self, 200, webhooks)
 
                 self._handle("api.get_webhooks", handle)
@@ -124,6 +135,10 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
 
         def _create_webhook(self, span) -> None:
             body = self._read_json_body()
+            # Same deployment-level escape hatch as fault_detector.py's
+            # delivery-time check - never a per-request/per-webhook toggle.
+            allow_private = os.environ.get("TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS") == "1"
+            validate_url(body["url"], allow_private=allow_private)  # raises ValueError -> 400, via _handle's except clause
             webhook = {
                 "id": json_store.new_id(),
                 "url": body["url"],
@@ -147,6 +162,18 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
                     json_store.save(path, remaining)
             span.set_attribute("found", found)
             self.send_response(204 if found else 404)
+            self.end_headers()
+
+        def _enable_webhook(self, webhook_id: str, span) -> None:
+            span.set_attribute("webhook_id", webhook_id)
+            webhooks = json_store.load(webhooks_path)
+            if not any(w["id"] == webhook_id for w in webhooks):
+                self.send_response(404)
+                self.end_headers()
+                return
+            with ts_pool.connection() as conn:
+                enable_webhook(conn, webhook_id)
+            self.send_response(204)
             self.end_headers()
 
         def _list_faults(self, span) -> None:

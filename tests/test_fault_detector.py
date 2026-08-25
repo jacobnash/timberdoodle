@@ -31,7 +31,12 @@ def fault_conn():
 
 
 @pytest.fixture
-def receiver():
+def receiver(monkeypatch):
+    # fault_detector.py's real delivery path rejects non-public webhook
+    # targets by default (see webhooks.validate_url) - this is the
+    # deployment-level escape hatch, exercised here because the receiver
+    # this fixture spins up is deliberately a loopback address.
+    monkeypatch.setenv("TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS", "1")
     received = []
 
     class Receiver(BaseHTTPRequestHandler):

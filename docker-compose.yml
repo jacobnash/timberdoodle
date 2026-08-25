@@ -3,6 +3,7 @@ x-daemon-env: &daemon-env
   OXIGRAPH_URL: http://oxigraph:7878
   MQTT_HOST: mosquitto
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+  TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS: ${TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS:-}
 
 x-daemon-depends-on: &daemon-depends-on
   postgres:
@@ -55,10 +56,18 @@ services:
   grafana:
     image: grafana/grafana-oss:latest
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANON_ENABLED:-false}
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-timberdoodle}
+      # Grafana's newer apiserver-backed provisioning path (feature toggle
+      # "provisioning", on by default in recent grafana-oss:latest) throws
+      # "Datasource provisioning error: data source not found" against our
+      # classic file-based grafana/provisioning/ YAML - disabling it falls
+      # back to the classic provisioner, which works correctly.
+      GF_FEATURE_TOGGLES_DISABLE: "provisioning"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "3033:3000"
 
@@ -110,6 +119,32 @@ services:
       - .:/app
     depends_on: *daemon-depends-on
 
+  validate_api:
+    build: .
+    command: python -m timberdoodle.validate_api
+    environment: *daemon-env
+    volumes:
+      - .:/app
+    depends_on: *daemon-depends-on
+
+  haystack_puller:
+    build: .
+    command: python -m timberdoodle.haystack_puller
+    profiles: ["haystack-pull"]
+    environment:
+      <<: *daemon-env
+      REMOTE_HAYSTACK_URL: ${REMOTE_HAYSTACK_URL:-}
+      REMOTE_HAYSTACK_USER: ${REMOTE_HAYSTACK_USER:-}
+      REMOTE_HAYSTACK_PASSWORD: ${REMOTE_HAYSTACK_PASSWORD:-}
+      REMOTE_HAYSTACK_SOURCE_ID: ${REMOTE_HAYSTACK_SOURCE_ID:-haxall}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oxigraph:
+        condition: service_started
+
   gateway:
     image: nginx:alpine
     ports:
@@ -123,6 +158,7 @@ services:
       - ingest_api
       - fault_api
       - derivation_api
+      - validate_api
 
 volumes:
   oxigraph-data:

@@ -13,10 +13,17 @@ envelope `mqtt_listener.py` and `POST /ingest` both consume.
 ## Quick start
 
 ```bash
+cp .env.example .env                                                # first time only, see below
 htpasswd -bc gateway/read.htpasswd  <read-user>  <read-password>   # first time only
 htpasswd -bc gateway/write.htpasswd <write-user> <write-password>  # first time only
 docker compose up -d
 ```
+
+`.env.example` lists every environment variable any part of this repo
+reads, each annotated with its default and which process needs it —
+nothing in it is required just to bring the stack up. Postgres's password
+specifically comes from `POSTGRES_PASSWORD` in `.env` (defaults to
+`timberdoodle` if unset — fine for local dev, change it for anything else).
 
 That's everything — 5 infra containers (mosquitto, oxigraph, postgres,
 jaeger, grafana), all 6 processes below, and an nginx gateway in front of
@@ -33,10 +40,11 @@ requires manual per-process startup anymore.
 | `fault_detector` | Evaluates rules against live readings (Cur) and history (His), fires webhooks on fault open/resolve. | — |
 | `derivation_api` | CRUD for derivations (computed/synthetic histories) + per-target health, `POST /derivations/test`, `POST /derivations/dry-run`. | 8003 |
 | `derivation_engine` | Evaluates derivations on a sweep and, for cur-mode ones, on matching MQTT messages; writes results back into Oxigraph + Postgres. | — |
+| `validate_api` | `POST /validate` — checks the live entity graph against Brick's own SHACL shapes (`pip install -e ".[validate]"`). | 8005 |
 
-The 3 HTTP APIs aren't exposed on the host directly anymore — go through
+The 4 HTTP APIs aren't exposed on the host directly anymore — go through
 the gateway at `localhost:8080` instead, prefixed by API name
-(`/ingest/*`, `/fault/*`, `/derivation/*`). It requires HTTP basic auth:
+(`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`). It requires HTTP basic auth:
 `GET` requests need a `gateway/read.htpasswd` credential, anything else
 (`POST`/`DELETE`) needs a `gateway/write.htpasswd` credential (a write
 credential doesn't also satisfy read unless you add it to both files).
@@ -49,29 +57,68 @@ prompt covers it too.
 
 ```bash
 curl -u <read-user>:<read-password> localhost:8080/ingest/openapi.yaml
-curl -u <write-user>:<write-password> -X POST localhost:8080/ingest/ingest -d '...'
+curl -u <write-user>:<write-password> -X POST localhost:8080/ingest/ingest \
+  -d '{"point": "fbf/mock-ahu-1/analogValue,1", "value": 71.0}'
 ```
+
+The first command should return the OpenAPI YAML; the second returns
+`204 No Content` on success (add `-i` to `curl` to see the status code) —
+a `401` means auth failed, a `400` means the JSON body itself was
+malformed or missing the required `point` field.
 
 Each API still serves its own OpenAPI spec at `GET /openapi.yaml` and a
 Swagger UI at `GET /docs` (through the gateway). For the full
-cross-referenced documentation site (all 3 API catalog entries plus
+cross-referenced documentation site (all 4 API catalog entries plus
 architecture and feature docs), see [`docs-site/`](docs-site) —
 `cd docs-site && npm install && npm run dev`.
 
-Postgres's password comes from `POSTGRES_PASSWORD` in `.env` (defaults to
-`timberdoodle` if unset — fine for local dev, change it for anything else).
+Everything from here on runs bare-metal (not inside a container), against
+the docker-compose services above. It assumes `python`/`pip` resolve to
+the environment you ran `pip install -e .` in (a venv is the normal way
+to get that — `python3 -m venv .venv && source .venv/bin/activate &&
+pip install -e .` if you haven't already); some commands below need an
+optional extra on top of that base install (`.[dev]`, `.[llm]`,
+`.[validate]`), called out where they're used.
 
 ### Mock hospital demo: auto-tagging, derivations/faults, UI
 
-After [FBF](../fbf)'s mock hospital site is generated and provisioned (see
-`../fbf/README.md`) and `mqtt_listener.py` is ingesting:
+This demo needs live BACnet-over-MQTT readings, which come from
+[FBF](../fbf) — a separate sibling repo (`../fbf`, not part of this
+checkout). Clone/set it up first, then generate and provision its mock
+hospital site (~500 points, ~90 pieces of equipment):
+
+```bash
+# in ../fbf, after `pip install -e ".[dev]"` there:
+python -m fbf.mock_hospital generate --out hospital_site_spec.json   # one-shot: writes the site spec
+
+# each in its own long-running terminal:
+python -m fbf.mock_device --address <your-iface>/24:47808 --instance 3456 --site-spec hospital_site_spec.json   # simulated BACnet device
+python -m fbf.api --address <your-iface>/24:47820 --mqtt-host localhost   # discovery/connections API, publishes to MQTT
+
+# one-shot, once both of the above are up:
+python -m fbf.mock_hospital provision --device-address <your-iface>:47808 --device-instance 3456   # provisions one connection per equipment
+```
+
+`<your-iface>` is your host's own network interface address (bacpypes3's
+local-BACnet-address arg — see FBF's `docs/bacnet-discovery-api.md`).
+Once provisioned, Timberdoodle's `mqtt_listener.py` picks up the
+readings/tags unchanged — no FBF-specific code on this side. See
+`../fbf/README.md` for anything not covered here (it's a separate,
+independently-versioned project).
+
+With `mqtt_listener.py` ingesting:
 
 ```bash
 pip install -e ".[llm]"                    # anthropic + pydantic, only needed for autotag
 ANTHROPIC_API_KEY=... python -m timberdoodle.autotag   # rule engine + LLM fallback for what it can't place
-python scripts/seed_derivations_and_faults.py           # Brick derivations + fault rules (needs derivation_api/fault_api running)
+TIMBERDOODLE_WRITE_USER=<write-user> TIMBERDOODLE_WRITE_PASSWORD=<write-password> \
+  python scripts/seed_derivations_and_faults.py         # Brick derivations + fault rules, writes through the gateway
 python -m timberdoodle.ui_server                         # browse equipment/points/charts at localhost:8004 (no-store, so edits show up on refresh)
 ```
+
+`seed_derivations_and_faults.py` authenticates through the gateway, so
+`TIMBERDOODLE_WRITE_USER`/`TIMBERDOODLE_WRITE_PASSWORD` must match a
+credential in `gateway/write.htpasswd`.
 
 `ui_server.py` also serves `ui/devices.html` (localhost:8004/devices.html)
 - a dashboard for FBF's periodic BACnet/Modbus device discovery: review
@@ -95,19 +142,89 @@ human to review and promote - it never edits the live rule set itself.
 | oxigraph | 7878 | RDF/SPARQL graph store |
 | postgres | 5433 (→5432 in-container) | Timescale hypertable, `point_history` |
 | jaeger | 16686 (UI), 4318 (OTLP HTTP) | Traces — every process exports here |
-| grafana | 3033 (→3000 in-container) | Dashboards over Postgres, anonymous admin enabled |
-| gateway | 8080 | Basic-auth-gated reverse proxy in front of ingest/fault/derivation APIs |
+| grafana | 3033 (→3000 in-container) | Dashboards over Postgres — a "Timberdoodle Postgres" datasource and a starter "Timberdoodle: Point History" dashboard are auto-provisioned (`grafana/provisioning/`). Login is the image default `admin`/`admin` unless `GRAFANA_ANON_ENABLED=true` in `.env` (off by default — see `.env.example`; changing it needs `docker compose up -d grafana` to recreate the container, since compose only reads `.env` at container start, not while it's already running) |
+| gateway | 8080 | Basic-auth-gated reverse proxy in front of ingest/fault/derivation/validate APIs |
 
 Postgres is remapped to host port 5433, not the default 5432, to avoid
 colliding with a locally-running Postgres instance. `ingest_api`/`fault_api`/
-`derivation_api` don't publish host ports at all anymore — reach them
-through the gateway on 8080.
+`derivation_api`/`validate_api` don't publish host ports at all anymore —
+reach them through the gateway on 8080.
+
+## Haystack pull (optional)
+
+A 13th, opt-in container pulls points/equipment/history from a remote
+Project Haystack server (Haxall, SkySpark, ...) — not started by plain
+`docker compose up -d`:
+
+```bash
+docker compose --profile haystack-pull up -d haystack_puller
+```
+
+Set `REMOTE_HAYSTACK_URL` and `REMOTE_HAYSTACK_USER` in `.env` first —
+**the container starts fine without them** (docker compose always passes
+these through, blank if unset, so nothing forces you to set them), it
+just fails every pull cycle against an empty URL and retries silently
+forever instead of erroring. See
+[`docs-site/pages/haystack-puller.mdx`](docs-site/pages/haystack-puller.mdx)
+for the full picture.
+
+## Real building data (optional)
+
+`scripts/load_bdg2_sample.py` loads a bounded slice of real hourly
+electricity meter readings from the [Building Data Genome Project 2](https://github.com/buds-lab/building-data-genome-project-2)
+(real energy meters from 1,636 real non-residential buildings, no mock
+data) straight into a running stack — needs `postgres`/`oxigraph` up
+(`docker compose up -d postgres oxigraph` is enough, the full stack isn't
+required):
+
+```bash
+python scripts/load_bdg2_sample.py --site Panther --limit 5
+```
+
+Real Brick classification included — each building lands as an
+`Electrical_Meter` equip with an `Electric_Energy_Sensor` point,
+`brick:hasPoint`-linked, same as any other source. `--byte-limit`
+(default 5MB) bounds how much of the ~166MB source file gets fetched;
+that's roughly two weeks of hourly data. One-shot, not a daemon — see
+`--site`/`--limit` in the script for other real sites/buildings (there
+are 19 real sites; check `metadata.csv`'s `site_id` column for names).
+
+## Backup and restore
+
+`scripts/backup.py` dumps the two volumes that hold real state —
+`postgres-data` (via `docker compose exec postgres pg_dump -U timberdoodle
+timberdoodle` — that Postgres user/database name is fixed, not
+configurable, same as `POSTGRES_USER`/`POSTGRES_DB` in docker-compose.yml)
+and `oxigraph-data` (via the same bulk graph-store GET the SHACL
+validator uses) — into timestamped, gzip'd files under `backups/`
+(gitignored). `grafana-data` is regenerable dashboard config, out of
+scope.
+
+```bash
+docker compose up -d postgres oxigraph   # only these two are needed
+python scripts/backup.py                 # writes backups/postgres-<ts>.sql.gz, backups/oxigraph-<ts>.ttl.gz
+python scripts/restore.py --postgres-file backups/postgres-<ts>.sql.gz --oxigraph-file backups/oxigraph-<ts>.ttl.gz
+```
+
+`restore.py` assumes a fresh/empty postgres+oxigraph (disaster recovery,
+not a merge onto live data) — restoring onto tables that already exist
+exits non-zero (`psql -v ON_ERROR_STOP=1`) rather than silently
+succeeding. Both scripts default to this checkout's own docker-compose
+project and to `$OXIGRAPH_URL`/`http://localhost:7878`; `--help` on
+either documents `--compose-project-dir`/`--oxigraph-url`/`--out-dir` for
+pointing at a different target (e.g. a throwaway container while testing
+restore, rather than the live stack).
 
 ## Tests
 
 ```bash
-python -m pytest -m "integration or not integration"
+pip install -e ".[dev]"                                # first time only: pytest + the OpenAPI-spec-validation deps
+python -m pytest -m "integration or not integration"  # everything; requires `docker compose up -d` first
+python -m pytest -m "not integration"                  # unit tests only, no services needed
 ```
 
-The `integration` marker means "requires the docker-compose services
-running" — see `pyproject.toml`.
+The first command's marker expression is a tautology (every test either
+has the `integration` marker or doesn't), so it runs the full suite,
+including tests that hit live Postgres/Oxigraph/MQTT — bring the stack up
+first. Use the second command on a fresh checkout with nothing running.
+See `pyproject.toml` for the marker definition.

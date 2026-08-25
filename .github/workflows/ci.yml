@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,validate]"
+      - run: pytest -m "not integration"
+      - run: openapi-spec-validator openapi.yaml fault-api-openapi.yaml derivation-api-openapi.yaml validate-api-openapi.yaml
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,validate]"
+      # gateway/*.htpasswd are gitignored and not auto-generated (see
+      # CLAUDE.md) - docker compose up refuses to start the gateway
+      # service without them. Throwaway CI-only credentials, never
+      # committed.
+      - run: |
+          sudo apt-get update && sudo apt-get install -y apache2-utils
+          htpasswd -bc gateway/read.htpasswd ci-reader ci-reader-pw
+          htpasswd -bc gateway/write.htpasswd ci-writer ci-writer-pw
+      - run: docker compose up -d --build
+      - name: Wait for postgres to be healthy
+        run: |
+          for i in $(seq 1 60); do
+            status=$(docker compose ps postgres --format json | python3 -c "import json,sys; print(json.load(sys.stdin).get('Health',''))")
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          echo "postgres never became healthy" >&2
+          docker compose logs
+          exit 1
+      - run: pytest -m "integration or not integration"
+      - if: always()
+        run: docker compose logs

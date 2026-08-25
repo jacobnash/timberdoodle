@@ -1,0 +1,65 @@
+{
+  "title": "Timberdoodle: Point History",
+  "uid": "timberdoodle-point-history",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "point_uri",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "timberdoodle-postgres" },
+        "query": "SELECT DISTINCT point_uri FROM point_history ORDER BY point_uri LIMIT 200",
+        "refresh": 2,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Point value over time",
+      "type": "timeseries",
+      "datasource": { "type": "postgres", "uid": "timberdoodle-postgres" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS \"time\", value FROM point_history WHERE point_uri = '$point_uri' AND $__timeFilter(ts) ORDER BY ts"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Distinct points ingested",
+      "type": "stat",
+      "datasource": { "type": "postgres", "uid": "timberdoodle-postgres" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COUNT(DISTINCT point_uri) AS distinct_points FROM point_history"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Open faults",
+      "type": "table",
+      "datasource": { "type": "postgres", "uid": "timberdoodle-postgres" },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 10 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT started_at, rule_id, point_uri FROM faults WHERE status = 'open' ORDER BY started_at DESC LIMIT 50"
+        }
+      ]
+    }
+  ]
+}

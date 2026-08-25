@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from timberdoodle.webhooks import deliver, matches_filter, sign
+from timberdoodle.webhooks import deliver, matches_filter, sign, validate_url
 
 
 def test_sign_produces_a_known_hmac_sha256_hex_digest():
@@ -66,7 +66,7 @@ def test_deliver_success_signature_verifies_against_received_bytes():
         secret = "webhook-secret"
         payload = {"event": "fault.opened", "rule_id": "high-temp", "point_uri": "urn:point:zone-1"}
 
-        success, error = deliver(url, secret, payload)
+        success, error = deliver(url, secret, payload, allow_private=True)
 
         assert success is True
         assert error is None
@@ -93,7 +93,33 @@ def test_deliver_retries_then_reports_failure_against_an_unreachable_port():
         max_attempts=3,
         backoff_base_seconds=0.05,  # fast test, real retries still happen
         timeout_seconds=1.0,
+        allow_private=True,
     )
 
     assert success is False
     assert error is not None
+
+
+def test_validate_url_rejects_non_https_by_default():
+    with pytest.raises(ValueError):
+        validate_url("http://example.com/hook")
+
+
+def test_validate_url_rejects_loopback_and_private_targets():
+    with pytest.raises(ValueError):
+        validate_url("https://localhost/hook")
+    with pytest.raises(ValueError):
+        validate_url("https://127.0.0.1/hook")
+    with pytest.raises(ValueError):
+        validate_url("https://10.0.0.5/hook")
+
+
+def test_validate_url_allow_private_permits_loopback_http():
+    validate_url("http://127.0.0.1:9999/hook", allow_private=True)  # must not raise
+
+
+def test_deliver_rejects_disallowed_url_without_retrying():
+    success, error = deliver("http://127.0.0.1:9999/hook", "secret", {"event": "fault.opened"})
+
+    assert success is False
+    assert "https" in error or "non-public" in error or "resolve" in error

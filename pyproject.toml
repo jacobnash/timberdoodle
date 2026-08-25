@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "openapi-spec-validator>=0.7.0", "jsonschema>=4.0.0"]
 llm = ["anthropic>=0.69.0", "pydantic>=2.0.0"]
+validate = ["pyshacl>=0.30.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

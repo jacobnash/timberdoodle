@@ -147,6 +147,17 @@ def is_webhook_disabled(conn: psycopg.Connection, webhook_id: str) -> bool:
     return bool(row[0]) if row else False
 
 
+def list_webhook_health(conn: psycopg.Connection) -> dict[str, dict]:
+    """Every webhook's health in one query, keyed by webhook_id - the
+    GET /webhooks list endpoint needs this for every row, not just one,
+    so a single batch query beats is_webhook_disabled()'s per-id lookup
+    N+1'd across the whole list. A webhook with no row here has never
+    recorded a delivery attempt - callers should treat that as
+    not-disabled/0-failures, same as is_webhook_disabled's no-row case."""
+    rows = conn.execute("SELECT webhook_id, disabled, consecutive_failures, last_error FROM webhook_health").fetchall()
+    return {r[0]: {"disabled": r[1], "consecutive_failures": r[2], "last_error": r[3]} for r in rows}
+
+
 def enable_webhook(conn: psycopg.Connection, webhook_id: str) -> None:
     conn.execute(
         "UPDATE webhook_health SET disabled = FALSE, consecutive_failures = 0 WHERE webhook_id = %s",

@@ -107,6 +107,16 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(live_server, sp
     webhooks_list = requests.get(f"{live_server}/webhooks").json()
     matching = next(w for w in webhooks_list if w["id"] == webhook["id"])
     assert matching["secret"] is None  # redacted on every later GET
+    # never had a delivery attempt - health defaults, not absent/error
+    assert matching["disabled"] is False
+    assert matching["consecutive_failures"] == 0
+    assert matching["last_error"] is None
+    _assert_matches_schema(matching, {"$ref": "#/components/schemas/Webhook"}, spec)
+
+    enable_resp = requests.post(f"{live_server}/webhooks/{webhook['id']}/enable")
+    assert enable_resp.status_code == 204
+    enable_missing_resp = requests.post(f"{live_server}/webhooks/does-not-exist/enable")
+    assert enable_missing_resp.status_code == 404
 
     faults_resp = requests.get(f"{live_server}/faults")
     assert faults_resp.status_code == 200

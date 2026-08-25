@@ -111,12 +111,11 @@ paths:
       tags: [Webhooks]
       summary: Register a webhook subscription
       description: >-
-        **No SSRF protection in v1.** `url` is fetched directly by
-        `fault_detector.py` with no restriction on target address - do not
-        expose this API to untrusted callers, since a registered webhook
-        could target internal infrastructure (e.g. `localhost:5433`,
-        `oxigraph:7878`). Appropriate for the single-trusted-operator,
-        localhost-docker-compose deployment this project targets today.
+        `url` must be `https://` and resolve to a public, non-reserved
+        address - registration-time and every delivery attempt both
+        reject loopback/private/link-local/reserved/multicast targets
+        (e.g. `localhost`, `127.0.0.1`, `oxigraph`, `10.0.0.0/8`), closing
+        the SSRF path against internal infrastructure.
       requestBody:
         required: true
         content:
@@ -139,7 +138,13 @@ paths:
       operationId: listWebhooks
       tags: [Webhooks]
       summary: List every registered webhook
-      description: "`secret` is always redacted (`null`) in this response - it's only ever shown once, in the POST /webhooks response at creation time."
+      description: >-
+        `secret` is always redacted (`null`) in this response - it's only
+        ever shown once, in the POST /webhooks response at creation time.
+        `disabled`/`consecutive_failures`/`last_error` reflect delivery
+        health (see `POST /webhooks/{id}/enable`) - a webhook that's never
+        had a delivery attempt shows `disabled: false`,
+        `consecutive_failures: 0`, `last_error: null`.
       responses:
         "200":
           description: Every webhook, secrets redacted.
@@ -163,6 +168,26 @@ paths:
       responses:
         "204":
           description: Deleted. No response body.
+        "404":
+          description: No webhook with that id.
+  /webhooks/{id}/enable:
+    post:
+      operationId: enableWebhook
+      tags: [Webhooks]
+      summary: Re-enable a webhook auto-disabled after 5 consecutive delivery failures
+      description: >-
+        There's no scheduled re-enable - a webhook that hit the failure
+        threshold stays disabled until this is called. Clears
+        `consecutive_failures` back to 0.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Re-enabled. No response body.
         "404":
           description: No webhook with that id.
   /faults:
@@ -270,8 +295,8 @@ components:
           type: string
           example: "https://example.com/hooks/timberdoodle"
         secret:
-          type: string
-          description: "Used to HMAC-SHA256 sign every delivered payload (X-Timberdoodle-Signature header, sha256=... format). Shown once, at creation."
+          type: ["string", "null"]
+          description: "Used to HMAC-SHA256 sign every delivered payload (X-Timberdoodle-Signature header, sha256=... format). Send a real string when creating a webhook; always null when read back via GET /webhooks (shown as a real string exactly once, in the POST /webhooks response)."
         filter:
           type: ["object", "null"]
           description: Omit or null to receive every fault. Currently supports scoping to one rule_id.
@@ -285,6 +310,15 @@ components:
           properties:
             id:
               type: string
+            disabled:
+              type: boolean
+              description: "Present on GET /webhooks list responses only (absent on the POST /webhooks creation response). True once consecutive_failures has hit the auto-disable threshold (5) - see POST /webhooks/{id}/enable."
+            consecutive_failures:
+              type: integer
+              description: GET-only, see disabled.
+            last_error:
+              type: ["string", "null"]
+              description: GET-only, see disabled. The most recent delivery error, if any.
         - $ref: "#/components/schemas/CreateWebhookRequest"
     Fault:
       type: object

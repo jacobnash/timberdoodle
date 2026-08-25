@@ -57,7 +57,7 @@ const config: ZudokuConfig = {
       type: "category",
       label: "Documentation",
       icon: "book",
-      items: ["/introduction", "/architecture", "/fault-detection", "/webhooks", "/haxall-drop-in"],
+      items: ["/introduction", "/architecture", "/fault-detection", "/webhooks", "/validate", "/haxall-drop-in", "/haystack-puller", "/adding-a-data-source"],
     },
     {
       type: "category",
@@ -68,6 +68,7 @@ const config: ZudokuConfig = {
         { type: "link", label: "Ingest API", to: "/api/ingest" },
         { type: "link", label: "Fault API", to: "/api/fault" },
         { type: "link", label: "Derivation API", to: "/api/derivation" },
+        { type: "link", label: "Validate API", to: "/api/validate" },
         { type: "link", label: "FBF API (BACnet/Modbus)", to: "/api/fbf" },
       ],
     },
@@ -95,6 +96,12 @@ const config: ZudokuConfig = {
       input: "../derivation-api-openapi.yaml",
       path: "/api/derivation",
       categories: [{ label: "Timberdoodle APIs", tags: ["Derivation API"] }],
+    },
+    {
+      type: "file",
+      input: "../validate-api-openapi.yaml",
+      path: "/api/validate",
+      categories: [{ label: "Timberdoodle APIs", tags: ["Validate API"] }],
     },
     {
       // FBF is a separate, independently-versioned sibling project

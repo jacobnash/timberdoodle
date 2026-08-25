@@ -1,0 +1,18 @@
+apiVersion: 1
+
+datasources:
+  - name: Timberdoodle Postgres
+    uid: timberdoodle-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: timberdoodle
+    user: timberdoodle
+    isDefault: true
+    editable: true
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
