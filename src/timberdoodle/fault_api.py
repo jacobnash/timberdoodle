@@ -14,7 +14,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from timberdoodle import docs_ui, json_store, tracing
+from timberdoodle import docs_ui, gateway_auth, json_store, tracing
 from timberdoodle.faults import enable_webhook, ensure_schema, list_faults, list_webhook_health
 from timberdoodle.timeseries import connect_pool
 from timberdoodle.webhooks import validate_url
@@ -53,7 +53,16 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             length = int(self.headers.get("Content-Length", 0))
             return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
 
+        def _require_gateway(self) -> bool:
+            if gateway_auth.request_came_through_gateway(self):
+                return True
+            self.send_response(401)
+            self.end_headers()
+            return False
+
         def do_POST(self):
+            if not self._require_gateway():
+                return
             if self.path == "/rules":
                 self._handle("api.post_rules", self._create_rule)
                 return
@@ -68,6 +77,14 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             self.end_headers()
 
         def do_GET(self):
+            if self.path == "/openapi.yaml":
+                self._serve_openapi_spec()
+                return
+            if self.path == "/docs":
+                docs_ui.serve(self)
+                return
+            if not self._require_gateway():
+                return
             if self.path == "/rules":
                 self._handle("api.get_rules", lambda span: _respond_json(self, 200, json_store.load(rules_path)))
                 return
@@ -87,16 +104,12 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             if self.path.startswith("/faults"):
                 self._handle("api.get_faults", self._list_faults)
                 return
-            if self.path == "/openapi.yaml":
-                self._serve_openapi_spec()
-                return
-            if self.path == "/docs":
-                docs_ui.serve(self)
-                return
             self.send_response(404)
             self.end_headers()
 
         def do_DELETE(self):
+            if not self._require_gateway():
+                return
             if self.path.startswith("/rules/"):
                 rule_id = self.path[len("/rules/"):]
                 self._handle("api.delete_rule", lambda span: self._delete(rules_path, rule_id, span))

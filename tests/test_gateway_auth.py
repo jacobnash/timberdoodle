@@ -118,19 +118,19 @@ def test_existing_htpasswd_gated_services_are_unaffected():
     tested below.
 
     Update this list as each location gets cut over (see git log for
-    "Cut over /X/ to gateway-enforced auth" commits) - /validate/ and
-    /derivation/ are done; /ingest/ and /fault/ remain."""
-    for path in ("/ingest/openapi.yaml", "/fault/openapi.yaml"):
+    "Cut over /X/ to gateway-enforced auth" commits) - /validate/,
+    /derivation/, /fault/ are done; /ingest/ remains."""
+    for path in ("/ingest/openapi.yaml",):
         resp = requests.get(f"{BASE}{path}")
         assert resp.status_code == 401, f"{path} should still require htpasswd creds, got {resp.status_code}"
 
 
 @pytest.mark.integration
 def test_cutover_locations_no_longer_use_htpasswd():
-    """The flip side of the check above - confirms /validate/ and
-    /derivation/ really did move to the new model (public GET routes no
-    longer need any credential at all, htpasswd or otherwise)."""
-    for path in ("/validate/openapi.yaml", "/derivation/openapi.yaml"):
+    """The flip side of the check above - confirms /validate/,
+    /derivation/, /fault/ really did move to the new model (public GET
+    routes no longer need any credential at all, htpasswd or otherwise)."""
+    for path in ("/validate/openapi.yaml", "/derivation/openapi.yaml", "/fault/openapi.yaml"):
         resp = requests.get(f"{BASE}{path}")
         assert resp.status_code == 200, f"{path} should be public under gateway-enforced auth, got {resp.status_code}"
 

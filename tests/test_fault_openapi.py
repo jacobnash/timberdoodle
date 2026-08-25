@@ -56,8 +56,12 @@ def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
     validator_cls(schema, registry=registry).validate(instance)
 
 
+GATEWAY_SECRET = "test-gateway-secret"
+
+
 @pytest.fixture
-def live_server(tmp_path):
+def live_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMBERDOODLE_GATEWAY_SECRET", GATEWAY_SECRET)
     ts_pool = connect_pool()
     with ts_pool.connection() as conn:
         ensure_schema(conn)
@@ -73,6 +77,16 @@ def live_server(tmp_path):
     ts_pool.close()
 
 
+@pytest.fixture
+def gw(live_server):
+    """A requests.Session with the gateway-secret header pre-attached -
+    every route except GET /openapi.yaml and GET /docs needs it (see
+    gateway_auth.request_came_through_gateway)."""
+    s = requests.Session()
+    s.headers["X-Gateway-Secret"] = GATEWAY_SECRET
+    return s
+
+
 @pytest.mark.integration
 def test_get_openapi_yaml_serves_the_real_spec_file(live_server):
     resp = requests.get(f"{live_server}/openapi.yaml")
@@ -83,8 +97,14 @@ def test_get_openapi_yaml_serves_the_real_spec_file(live_server):
 
 
 @pytest.mark.integration
-def test_full_rule_webhook_fault_flow_matches_documented_schemas(live_server, spec):
-    rule_resp = requests.post(
+def test_post_without_gateway_secret_is_401(live_server):
+    resp = requests.post(f"{live_server}/rules", json={"name": "x", "mode": "cur", "type": "range", "applies_to": {}, "min": 1, "max": 2})
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_full_rule_webhook_fault_flow_matches_documented_schemas(gw, live_server, spec):
+    rule_resp = gw.post(
         f"{live_server}/rules",
         json={"name": "temp-range", "mode": "cur", "type": "range", "applies_to": {"topic_glob": "test-openapi-fd/*"}, "min": 60.0, "max": 80.0},
     )
@@ -92,11 +112,11 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(live_server, sp
     rule = rule_resp.json()
     _assert_matches_schema(rule, spec["paths"]["/rules"]["post"]["responses"]["201"]["content"]["application/json"]["schema"], spec)
 
-    list_resp = requests.get(f"{live_server}/rules")
+    list_resp = gw.get(f"{live_server}/rules")
     assert list_resp.status_code == 200
     assert any(r["id"] == rule["id"] for r in list_resp.json())
 
-    webhook_resp = requests.post(
+    webhook_resp = gw.post(
         f"{live_server}/webhooks",
         json={"url": "https://example.com/hooks", "secret": "shh", "filter": None},
     )
@@ -104,7 +124,7 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(live_server, sp
     webhook = webhook_resp.json()
     assert webhook["secret"] == "shh"  # shown once, at creation
 
-    webhooks_list = requests.get(f"{live_server}/webhooks").json()
+    webhooks_list = gw.get(f"{live_server}/webhooks").json()
     matching = next(w for w in webhooks_list if w["id"] == webhook["id"])
     assert matching["secret"] is None  # redacted on every later GET
     # never had a delivery attempt - health defaults, not absent/error
@@ -113,23 +133,23 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(live_server, sp
     assert matching["last_error"] is None
     _assert_matches_schema(matching, {"$ref": "#/components/schemas/Webhook"}, spec)
 
-    enable_resp = requests.post(f"{live_server}/webhooks/{webhook['id']}/enable")
+    enable_resp = gw.post(f"{live_server}/webhooks/{webhook['id']}/enable")
     assert enable_resp.status_code == 204
-    enable_missing_resp = requests.post(f"{live_server}/webhooks/does-not-exist/enable")
+    enable_missing_resp = gw.post(f"{live_server}/webhooks/does-not-exist/enable")
     assert enable_missing_resp.status_code == 404
 
-    faults_resp = requests.get(f"{live_server}/faults")
+    faults_resp = gw.get(f"{live_server}/faults")
     assert faults_resp.status_code == 200
     assert isinstance(faults_resp.json(), list)
 
     # malformed body -> documented 400
-    bad_resp = requests.post(f"{live_server}/rules", json={"mode": "cur"})  # missing name/type/applies_to
+    bad_resp = gw.post(f"{live_server}/rules", json={"mode": "cur"})  # missing name/type/applies_to
     assert bad_resp.status_code == 400
     _assert_matches_schema(bad_resp.json(), _response_schema(spec, spec["paths"]["/rules"]["post"]["responses"]["400"]), spec)
 
-    delete_resp = requests.delete(f"{live_server}/rules/{rule['id']}")
+    delete_resp = gw.delete(f"{live_server}/rules/{rule['id']}")
     assert delete_resp.status_code == 204
-    delete_again = requests.delete(f"{live_server}/rules/{rule['id']}")
+    delete_again = gw.delete(f"{live_server}/rules/{rule['id']}")
     assert delete_again.status_code == 404
 
-    requests.delete(f"{live_server}/webhooks/{webhook['id']}")
+    gw.delete(f"{live_server}/webhooks/{webhook['id']}")
