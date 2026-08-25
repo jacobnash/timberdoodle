@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from rdflib import URIRef
 
-from timberdoodle import docs_ui, tracing
+from timberdoodle import docs_ui, gateway_auth, tracing
 from timberdoodle.ingest import ingest_reading, ingest_tags, link_equip_ref, link_part_of, merge_equip, topic_to_point_uri
 from timberdoodle.mapping import reclassify
 from timberdoodle.remote_store import RemoteStore
@@ -45,7 +45,16 @@ def _respond_error(handler, status: int, message: str) -> None:
 
 def make_handler(store, ts_pool):
     class IngestHandler(BaseHTTPRequestHandler):
+        def _require_gateway(self) -> bool:
+            if gateway_auth.request_came_through_gateway(self):
+                return True
+            self.send_response(401)
+            self.end_headers()
+            return False
+
         def do_POST(self):
+            if not self._require_gateway():
+                return
             if self.path == "/ingest":
                 self._post_ingest()
                 return
@@ -168,25 +177,30 @@ def make_handler(store, ts_pool):
                 docs_ui.serve(self)
                 return
 
+            if self.path == "/openapi.yaml":
+                with tracer.start_as_current_span("ingest_api.get_openapi_spec"):
+                    with open(OPENAPI_SPEC_PATH, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/yaml")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                return
+
+            if not self._require_gateway():
+                return
+
             if self.path.startswith("/history"):
                 self._get_history()
                 return
 
-            if self.path != "/openapi.yaml":
-                self.send_response(404)
-                self.end_headers()
-                return
-
-            with tracer.start_as_current_span("ingest_api.get_openapi_spec"):
-                with open(OPENAPI_SPEC_PATH, "rb") as f:
-                    body = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/yaml")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+            self.send_response(404)
+            self.end_headers()
 
         def do_DELETE(self):
+            if not self._require_gateway():
+                return
             if self.path.startswith("/history"):
                 self._delete_history()
                 return

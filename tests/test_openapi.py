@@ -33,8 +33,12 @@ def test_spec_is_well_formed_openapi(spec):
     validate(spec)  # raises on any real structural problem
 
 
+GATEWAY_SECRET = "test-gateway-secret"
+
+
 @pytest.fixture
-def live_server():
+def live_server(monkeypatch):
+    monkeypatch.setenv("TIMBERDOODLE_GATEWAY_SECRET", GATEWAY_SECRET)
     store = RemoteStore()
     ts_pool = connect_pool()
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store, ts_pool))
@@ -45,6 +49,16 @@ def live_server():
     yield base_url
     server.shutdown()
     ts_pool.close()
+
+
+@pytest.fixture
+def gw(live_server):
+    """A requests.Session with the gateway-secret header pre-attached -
+    every route except GET /openapi.yaml and GET /docs needs it (see
+    gateway_auth.request_came_through_gateway)."""
+    s = requests.Session()
+    s.headers["X-Gateway-Secret"] = GATEWAY_SECRET
+    return s
 
 
 def _schema_for(spec: dict, status: str, path: str = "/ingest", method: str = "post") -> dict:
@@ -76,18 +90,24 @@ def test_get_openapi_yaml_serves_the_real_spec_file(live_server):
 
 
 @pytest.mark.integration
-def test_post_ingest_single_reading_matches_documented_204(live_server, spec):
+def test_post_ingest_without_gateway_secret_is_401(live_server):
+    resp = requests.post(f"{live_server}/ingest", json={"point": "whatever", "value": 1.0})
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_post_ingest_single_reading_matches_documented_204(gw, live_server, spec):
     topic = f"test-openapi:single:{int(time.time())}"
-    resp = requests.post(f"{live_server}/ingest", json={"point": topic, "value": 71.0})
+    resp = gw.post(f"{live_server}/ingest", json={"point": topic, "value": 71.0})
 
     assert resp.status_code == 204
     assert resp.content == b""  # spec documents no response body on 204
 
 
 @pytest.mark.integration
-def test_post_ingest_batch_matches_documented_204(live_server):
+def test_post_ingest_batch_matches_documented_204(gw, live_server):
     ts = int(time.time())
-    resp = requests.post(
+    resp = gw.post(
         f"{live_server}/ingest",
         json=[
             {"point": f"test-openapi:batch-a:{ts}", "value": 1.0},
@@ -98,8 +118,8 @@ def test_post_ingest_batch_matches_documented_204(live_server):
 
 
 @pytest.mark.integration
-def test_post_ingest_malformed_json_matches_documented_400_schema(live_server, spec):
-    resp = requests.post(
+def test_post_ingest_malformed_json_matches_documented_400_schema(gw, live_server, spec):
+    resp = gw.post(
         f"{live_server}/ingest",
         data=b"not json",
         headers={"Content-Type": "application/json"},
@@ -112,8 +132,8 @@ def test_post_ingest_malformed_json_matches_documented_400_schema(live_server, s
 
 
 @pytest.mark.integration
-def test_post_ingest_missing_point_field_matches_documented_400_schema(live_server, spec):
-    resp = requests.post(f"{live_server}/ingest", json={"value": 71.0})  # no "point"
+def test_post_ingest_missing_point_field_matches_documented_400_schema(gw, live_server, spec):
+    resp = gw.post(f"{live_server}/ingest", json={"value": 71.0})  # no "point"
 
     assert resp.status_code == 400
     body = resp.json()
@@ -121,6 +141,6 @@ def test_post_ingest_missing_point_field_matches_documented_400_schema(live_serv
 
 
 @pytest.mark.integration
-def test_unknown_path_matches_documented_404(live_server):
-    resp = requests.get(f"{live_server}/does-not-exist")
+def test_unknown_path_matches_documented_404(gw, live_server):
+    resp = gw.get(f"{live_server}/does-not-exist")
     assert resp.status_code == 404

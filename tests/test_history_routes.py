@@ -27,8 +27,12 @@ def spec() -> dict:
         return yaml.safe_load(f)
 
 
+GATEWAY_SECRET = "test-gateway-secret"
+
+
 @pytest.fixture
-def live_server():
+def live_server(monkeypatch):
+    monkeypatch.setenv("TIMBERDOODLE_GATEWAY_SECRET", GATEWAY_SECRET)
     store = RemoteStore()
     ts_pool = connect_pool()
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store, ts_pool))
@@ -39,6 +43,16 @@ def live_server():
     yield base_url
     server.shutdown()
     ts_pool.close()
+
+
+@pytest.fixture
+def gw(live_server):
+    """A requests.Session with the gateway-secret header pre-attached -
+    every route except GET /openapi.yaml and GET /docs needs it (see
+    gateway_auth.request_came_through_gateway)."""
+    s = requests.Session()
+    s.headers["X-Gateway-Secret"] = GATEWAY_SECRET
+    return s
 
 
 def _assert_matches_schema(instance, spec: dict, json_pointer: str) -> None:
@@ -55,18 +69,24 @@ def _assert_matches_schema(instance, spec: dict, json_pointer: str) -> None:
 
 
 @pytest.mark.integration
-def test_history_round_trip_matches_documented_schema(live_server, spec):
+def test_get_history_without_gateway_secret_is_401(live_server):
+    resp = requests.get(f"{live_server}/history", params={"point": "whatever"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_history_round_trip_matches_documented_schema(gw, live_server, spec):
     # Both timestamps safely in the past - omitting `end` defaults to "now",
     # so a timestamp even a second ahead of the real clock would (correctly)
     # get excluded by that bound.
     topic = f"test-history:round-trip:{int(time.time())}"
     t0 = time.time() - 10
-    requests.post(f"{live_server}/ingest", json=[
+    gw.post(f"{live_server}/ingest", json=[
         {"point": topic, "value": 1.0, "ts": t0},
         {"point": topic, "value": 2.0, "ts": t0 + 1},
     ])
 
-    resp = requests.get(f"{live_server}/history", params={"point": topic})
+    resp = gw.get(f"{live_server}/history", params={"point": topic})
     assert resp.status_code == 200
     items = resp.json()
     _assert_matches_schema(items, spec, "/paths/~1history/get/responses/200/content/application~1json/schema")
@@ -74,51 +94,51 @@ def test_history_round_trip_matches_documented_schema(live_server, spec):
 
 
 @pytest.mark.integration
-def test_history_start_end_span_filters_inclusively(live_server):
+def test_history_start_end_span_filters_inclusively(gw, live_server):
     topic = f"test-history:span:{int(time.time())}"
     t0 = time.time() - 30
-    requests.post(f"{live_server}/ingest", json=[
+    gw.post(f"{live_server}/ingest", json=[
         {"point": topic, "value": 1.0, "ts": t0},
         {"point": topic, "value": 2.0, "ts": t0 + 10},
         {"point": topic, "value": 3.0, "ts": t0 + 20},
     ])
 
-    resp = requests.get(f"{live_server}/history", params={"point": topic, "start": t0, "end": t0 + 10})
+    resp = gw.get(f"{live_server}/history", params={"point": topic, "start": t0, "end": t0 + 10})
     assert [item["value"] for item in resp.json()] == [1.0, 2.0]
 
 
 @pytest.mark.integration
-def test_history_missing_point_matches_documented_400(live_server, spec):
-    resp = requests.get(f"{live_server}/history")
+def test_history_missing_point_matches_documented_400(gw, live_server, spec):
+    resp = gw.get(f"{live_server}/history")
     assert resp.status_code == 400
     _assert_matches_schema(resp.json(), spec, "/paths/~1history/get/responses/400/content/application~1json/schema")
 
 
 @pytest.mark.integration
-def test_history_malformed_start_matches_documented_400(live_server):
-    resp = requests.get(f"{live_server}/history", params={"point": "whatever", "start": "not-a-number"})
+def test_history_malformed_start_matches_documented_400(gw, live_server):
+    resp = gw.get(f"{live_server}/history", params={"point": "whatever", "start": "not-a-number"})
     assert resp.status_code == 400
     assert "error" in resp.json()
 
 
 @pytest.mark.integration
-def test_delete_history_item_then_404_on_repeat(live_server):
+def test_delete_history_item_then_404_on_repeat(gw, live_server):
     topic = f"test-history:delete:{int(time.time())}"
     t0 = time.time()
-    requests.post(f"{live_server}/ingest", json={"point": topic, "value": 1.0, "ts": t0})
+    gw.post(f"{live_server}/ingest", json={"point": topic, "value": 1.0, "ts": t0})
 
-    resp = requests.delete(f"{live_server}/history", params={"point": topic, "ts": t0})
+    resp = gw.delete(f"{live_server}/history", params={"point": topic, "ts": t0})
     assert resp.status_code == 204
     assert resp.content == b""
 
-    resp_again = requests.delete(f"{live_server}/history", params={"point": topic, "ts": t0})
+    resp_again = gw.delete(f"{live_server}/history", params={"point": topic, "ts": t0})
     assert resp_again.status_code == 404
 
-    assert requests.get(f"{live_server}/history", params={"point": topic}).json() == []
+    assert gw.get(f"{live_server}/history", params={"point": topic}).json() == []
 
 
 @pytest.mark.integration
-def test_delete_history_missing_params_matches_documented_400(live_server, spec):
-    resp = requests.delete(f"{live_server}/history", params={"point": "whatever"})  # no ts
+def test_delete_history_missing_params_matches_documented_400(gw, live_server, spec):
+    resp = gw.delete(f"{live_server}/history", params={"point": "whatever"})  # no ts
     assert resp.status_code == 400
     _assert_matches_schema(resp.json(), spec, "/paths/~1history/delete/responses/400/content/application~1json/schema")

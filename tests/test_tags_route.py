@@ -34,8 +34,12 @@ def spec() -> dict:
         return yaml.safe_load(f)
 
 
+GATEWAY_SECRET = "test-gateway-secret"
+
+
 @pytest.fixture
-def live_server():
+def live_server(monkeypatch):
+    monkeypatch.setenv("TIMBERDOODLE_GATEWAY_SECRET", GATEWAY_SECRET)
     store = RemoteStore()
     ts_pool = connect_pool()
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store, ts_pool))
@@ -48,6 +52,16 @@ def live_server():
     ts_pool.close()
 
 
+@pytest.fixture
+def gw(live_server):
+    """A requests.Session with the gateway-secret header pre-attached -
+    every route except GET /openapi.yaml and GET /docs needs it (see
+    gateway_auth.request_came_through_gateway)."""
+    s = requests.Session()
+    s.headers["X-Gateway-Secret"] = GATEWAY_SECRET
+    return s
+
+
 def _assert_matches_schema(instance, spec: dict, json_pointer: str) -> None:
     resource = Resource.from_contents(spec, default_specification=DRAFT202012)
     registry = Registry().with_resource(uri="spec", resource=resource)
@@ -57,9 +71,15 @@ def _assert_matches_schema(instance, spec: dict, json_pointer: str) -> None:
 
 
 @pytest.mark.integration
-def test_tags_direct_match_classifies_into_brick(live_server, spec):
+def test_post_tags_without_gateway_secret_is_401(live_server):
+    resp = requests.post(f"{live_server}/tags", json={"point": "whatever", "tags": {}})
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_tags_direct_match_classifies_into_brick(gw, live_server, spec):
     topic = f"test-tags:direct:{int(time.time())}"
-    resp = requests.post(f"{live_server}/tags", json={
+    resp = gw.post(f"{live_server}/tags", json={
         "point": topic,
         "tags": {"zone": True, "air": True, "temp": True, "sensor": True, "unit": "°F"},
     })
@@ -70,22 +90,22 @@ def test_tags_direct_match_classifies_into_brick(live_server, spec):
 
 
 @pytest.mark.integration
-def test_tags_no_overlap_is_a_miss(live_server):
+def test_tags_no_overlap_is_a_miss(gw, live_server):
     topic = f"test-tags:miss:{int(time.time())}"
-    resp = requests.post(f"{live_server}/tags", json={"point": topic, "tags": {"weather": True}})
+    resp = gw.post(f"{live_server}/tags", json={"point": topic, "tags": {"weather": True}})
     assert resp.status_code == 200
     assert resp.json() == {"point": f"urn:point:{topic}", "outcome": "miss", "brickClass": None}
 
 
 @pytest.mark.integration
-def test_tags_missing_field_matches_documented_400(live_server, spec):
-    resp = requests.post(f"{live_server}/tags", json={"point": "whatever"})  # no tags
+def test_tags_missing_field_matches_documented_400(gw, live_server, spec):
+    resp = gw.post(f"{live_server}/tags", json={"point": "whatever"})  # no tags
     assert resp.status_code == 400
     _assert_matches_schema(resp.json(), spec, "/paths/~1tags/post/responses/400/content/application~1json/schema")
 
 
 @pytest.mark.integration
-def test_tags_reposting_with_completing_tags_reclassifies_not_double_types(live_server):
+def test_tags_reposting_with_completing_tags_reclassifies_not_double_types(gw, live_server):
     """The reclassify wiring fix, honestly exercised: tags are additive
     (POSTing twice never un-asserts the first POST's tags), so the only way
     a second POST legitimately changes the outcome is when the added tags
@@ -94,11 +114,11 @@ def test_tags_reposting_with_completing_tags_reclassifies_not_double_types(live_
     the stale PROJ fallback type would still be asserted alongside the new
     direct Brick type; reclassify must leave only the second."""
     topic = f"test-tags:reclassify:{int(time.time())}"
-    first = requests.post(f"{live_server}/tags", json={"point": topic, "tags": {"zone": True, "air": True, "sensor": True}})
+    first = gw.post(f"{live_server}/tags", json={"point": topic, "tags": {"zone": True, "air": True, "sensor": True}})
     assert first.json()["outcome"] == "fallback"
     assert first.json()["brickClass"] == "Zone_Air_Temperature_Sensor"
 
-    second = requests.post(f"{live_server}/tags", json={"point": topic, "tags": {"temp": True}})  # completes the direct match
+    second = gw.post(f"{live_server}/tags", json={"point": topic, "tags": {"temp": True}})  # completes the direct match
     assert second.status_code == 200
     assert second.json() == {"point": f"urn:point:{topic}", "outcome": "direct", "brickClass": "Zone_Air_Temperature_Sensor"}
 
@@ -112,7 +132,7 @@ def test_tags_reposting_with_completing_tags_reclassifies_not_double_types(live_
 
 
 @pytest.mark.integration
-def test_tags_wires_equip_ref_into_hasPoint_automatically(live_server):
+def test_tags_wires_equip_ref_into_hasPoint_automatically(gw, live_server):
     """The other wiring fix: a point's equipRef, once the matching equip's
     own tags have landed, now resolves into a real hasPoint/isPointOf edge
     without any extra call - link_equip_ref existed but was never called
@@ -123,7 +143,7 @@ def test_tags_wires_equip_ref_into_hasPoint_automatically(live_server):
     store = RemoteStore()
     ingest_haystack_equip_tags(store, ref, {"ahu": True})
 
-    resp = requests.post(f"{live_server}/tags", json={"point": topic, "tags": {"zone": True, "equipRef": ref}})
+    resp = gw.post(f"{live_server}/tags", json={"point": topic, "tags": {"zone": True, "equipRef": ref}})
     assert resp.status_code == 200
 
     equip_uri = haystack_ref_to_equip_uri(ref)
@@ -135,7 +155,7 @@ def test_tags_wires_equip_ref_into_hasPoint_automatically(live_server):
 
 
 @pytest.mark.integration
-def test_equip_merge_unions_points_via_points_of_equip(live_server, spec):
+def test_equip_merge_unions_points_via_points_of_equip(gw, live_server, spec):
     store = RemoteStore()
     suffix = int(time.time())
     bacnet_equip = topic_prefix_to_equip_uri(f"test-equip-merge:{suffix}")
@@ -147,7 +167,7 @@ def test_equip_merge_unions_points_via_points_of_equip(live_server, spec):
     ingest_haystack_equip_tags(store, f"test-equip-merge-{suffix}", {"ahu": True})
     link_point_to_equip(store, haystack_point, haystack_equip)
 
-    resp = requests.post(f"{live_server}/equip/merge", json={"a": str(bacnet_equip), "b": str(haystack_equip)})
+    resp = gw.post(f"{live_server}/equip/merge", json={"a": str(bacnet_equip), "b": str(haystack_equip)})
     assert resp.status_code == 204
 
     expected = {str(bacnet_point), str(haystack_point)}
@@ -156,19 +176,19 @@ def test_equip_merge_unions_points_via_points_of_equip(live_server, spec):
 
 
 @pytest.mark.integration
-def test_equip_merge_missing_field_matches_documented_400(live_server, spec):
-    resp = requests.post(f"{live_server}/equip/merge", json={"a": "urn:equip:whatever"})  # no b
+def test_equip_merge_missing_field_matches_documented_400(gw, live_server, spec):
+    resp = gw.post(f"{live_server}/equip/merge", json={"a": "urn:equip:whatever"})  # no b
     assert resp.status_code == 400
     _assert_matches_schema(resp.json(), spec, "/paths/~1equip~1merge/post/responses/400/content/application~1json/schema")
 
 
 @pytest.mark.integration
-def test_part_links_hasPart_and_isPartOf(live_server):
+def test_part_links_hasPart_and_isPartOf(gw, live_server):
     suffix = int(time.time())
     parent = f"urn:equip:test-part:{suffix}"
     child = f"urn:equip:test-part:{suffix}/economizer"
 
-    resp = requests.post(f"{live_server}/part", json={"child": child, "parent": parent})
+    resp = gw.post(f"{live_server}/part", json={"child": child, "parent": parent})
     assert resp.status_code == 204
 
     store = RemoteStore()
@@ -180,7 +200,7 @@ def test_part_links_hasPart_and_isPartOf(live_server):
 
 
 @pytest.mark.integration
-def test_part_missing_field_matches_documented_400(live_server, spec):
-    resp = requests.post(f"{live_server}/part", json={"child": "urn:point:whatever"})  # no parent
+def test_part_missing_field_matches_documented_400(gw, live_server, spec):
+    resp = gw.post(f"{live_server}/part", json={"child": "urn:point:whatever"})  # no parent
     assert resp.status_code == 400
     _assert_matches_schema(resp.json(), spec, "/paths/~1part/post/responses/400/content/application~1json/schema")
