@@ -64,9 +64,10 @@ daemons behind the [gateway](/architecture#the-gateway) and no longer
 publishes port 8000 to the host directly, so `host.docker.internal:8000`
 will refuse the connection. Until `TimberdoodleHisExt.fan` is updated,
 either point it at the gateway instead
-(`http://host.docker.internal:8080/ingest/`, adding an HTTP basic-auth
-header from `gateway/write.htpasswd` — `hisWrite` calls `POST /ingest`,
-a mutating call) or, for a Haxall integration you consider fully trusted,
+(`http://host.docker.internal:8080/ingest/`, adding an `Authorization:
+Bearer <token>` header — `hisWrite` calls `POST /ingest`, a mutating
+call that needs an operator-role token, see README's "Gateway auth"
+section) or, for a Haxall integration you consider fully trusted,
 add a host port mapping back onto `ingest_api` in `docker-compose.yml`
 and accept that it bypasses the gateway's auth. Neither is done for you
 yet — pick the one that matches how trusted this particular Haxall

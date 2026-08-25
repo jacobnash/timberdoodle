@@ -13,17 +13,21 @@ envelope `mqtt_listener.py` and `POST /ingest` both consume.
 ## Quick start
 
 ```bash
-cp .env.example .env                                                # first time only, see below
-htpasswd -bc gateway/read.htpasswd  <read-user>  <read-password>   # first time only
-htpasswd -bc gateway/write.htpasswd <write-user> <write-password>  # first time only
+cp .env.example .env                                                     # first time only, see below
+echo "TIMBERDOODLE_JWT_SECRET=$(openssl rand -hex 32)" >> .env           # first time only
+echo "TIMBERDOODLE_GATEWAY_SECRET=$(openssl rand -hex 32)" >> .env       # first time only
 docker compose up -d
 ```
 
-`.env.example` lists every environment variable any part of this repo
-reads, each annotated with its default and which process needs it —
-nothing in it is required just to bring the stack up. Postgres's password
-specifically comes from `POSTGRES_PASSWORD` in `.env` (defaults to
-`timberdoodle` if unset — fine for local dev, change it for anything else).
+`docker compose up -d` refuses to start the gateway without both of
+those two secrets set — every route goes through real JWT verification
+in nginx itself now (see "Gateway auth" below), so there's no working
+default the way there is for everything else in `.env.example`, which
+lists every other environment variable any part of this repo reads,
+each annotated with its default and which process needs it. Postgres's
+password specifically comes from `POSTGRES_PASSWORD` in `.env` (defaults
+to `timberdoodle` if unset — fine for local dev, change it for anything
+else).
 
 That's everything — 5 infra containers (mosquitto, oxigraph, postgres,
 jaeger, grafana), all 7 processes below, and an nginx gateway in front of
@@ -50,27 +54,15 @@ demo browser UI (`ui/`) is served straight off the gateway at
 [`localhost:8080/ui/`](http://localhost:8080/ui/) — no separate
 `ui_server.py` needed for this path.
 
-### Gateway auth (two systems, mid-migration)
+### Gateway auth
 
-The gateway is moving from HTTP Basic (htpasswd) to JWT tokens verified
-in nginx itself via njs — incrementally, one location at a time, not a
-flag-day cutover. Today:
-
-- **`/ingest/*`** still uses HTTP Basic: `GET` needs a
-  `gateway/read.htpasswd` credential, anything else (`POST`/`DELETE`)
-  needs `gateway/write.htpasswd` (a write credential doesn't also
-  satisfy read unless added to both files). Both files are gitignored —
-  generate your own with `htpasswd -bc` as shown above.
-- **`/validate/*`, `/derivation/*`, `/fault/*`, and `/auth/*`** use the new model instead: a real JWT,
-  verified in nginx itself (`gateway/njs/`), with role/route policy
-  enforced by `gateway/njs/policy.js` — not per-API Python code. `POST
-  /auth/orgs` creates a new org plus its first admin user (public, no
-  credential needed — there's no other admin who could authorize a
-  brand-new org); `POST /auth/login` exchanges email/password for a JWT;
-  every other route on both APIs needs `Authorization: Bearer <token>`.
-  Needs `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET` set in
-  `.env` (see `.env.example`) — blank by default, so the rest of the
-  stack keeps working even before you configure these.
+Every route goes through real JWT verification in nginx itself
+(`gateway/njs/`, no per-API Python auth code) — role/route policy is
+enforced by one central table, `gateway/njs/policy.js`. `POST
+/auth/orgs` creates a new org plus its first admin user (public, no
+credential needed — there's no other admin who could authorize a
+brand-new org); `POST /auth/login` exchanges email/password for a JWT;
+every other route on every API needs `Authorization: Bearer <token>`.
 
 ```bash
 curl -X POST localhost:8080/auth/orgs -H 'Content-Type: application/json' \
@@ -79,18 +71,18 @@ curl -X POST localhost:8080/auth/login -H 'Content-Type: application/json' \
   -d '{"email": "admin@acme.example", "password": "change-me"}'
 # -> {"token": "...", "user": {...}} - use the token as a Bearer credential from here on
 curl localhost:8080/auth/me -H "Authorization: Bearer <token>"
-```
 
-```bash
-curl -u <read-user>:<read-password> localhost:8080/ingest/openapi.yaml
-curl -u <write-user>:<write-password> -X POST localhost:8080/ingest/ingest \
+curl localhost:8080/ingest/openapi.yaml   # public, no token needed
+curl -X POST localhost:8080/ingest/ingest -H "Authorization: Bearer <token>" \
   -d '{"point": "fbf/mock-ahu-1/analogValue,1", "value": 71.0}'
 ```
 
-The first command should return the OpenAPI YAML; the second returns
-`204 No Content` on success (add `-i` to `curl` to see the status code) —
-a `401` means auth failed, a `400` means the JSON body itself was
-malformed or missing the required `point` field.
+The first `curl` should return the OpenAPI YAML with no auth at all; the
+last returns `204 No Content` on success (add `-i` to `curl` to see the
+status code) — a `401` means the token is missing/invalid/expired, a
+`403` means the token's role doesn't satisfy that route (see
+`gateway/njs/policy.js`), a `400` means the JSON body itself was
+malformed or missing a required field.
 
 Each API still serves its own OpenAPI spec at `GET /openapi.yaml` and a
 Swagger UI at `GET /docs` (through the gateway). For the full
@@ -137,14 +129,16 @@ With `mqtt_listener.py` ingesting:
 ```bash
 pip install -e ".[llm]"                    # anthropic + pydantic, only needed for autotag
 ANTHROPIC_API_KEY=... python -m timberdoodle.autotag   # rule engine + LLM fallback for what it can't place
-TIMBERDOODLE_WRITE_USER=<write-user> TIMBERDOODLE_WRITE_PASSWORD=<write-password> \
+TIMBERDOODLE_ADMIN_EMAIL=<admin-email> TIMBERDOODLE_ADMIN_PASSWORD=<admin-password> \
   python scripts/seed_derivations_and_faults.py         # Brick derivations + fault rules, writes through the gateway
 python -m timberdoodle.ui_server                         # browse equipment/points/charts at localhost:8004 (no-store, so edits show up on refresh)
 ```
 
-`seed_derivations_and_faults.py` authenticates through the gateway, so
-`TIMBERDOODLE_WRITE_USER`/`TIMBERDOODLE_WRITE_PASSWORD` must match a
-credential in `gateway/write.htpasswd`.
+`seed_derivations_and_faults.py` logs in through the gateway itself
+(`POST /auth/login`) to get a Bearer token, so
+`TIMBERDOODLE_ADMIN_EMAIL`/`TIMBERDOODLE_ADMIN_PASSWORD` must match an
+existing admin account — create one first with `POST /auth/orgs` (see
+"Gateway auth" above) if you don't have one yet.
 
 `ui_server.py` also serves `ui/devices.html` (localhost:8004/devices.html)
 - a dashboard for FBF's periodic BACnet/Modbus device discovery: review
@@ -169,7 +163,7 @@ human to review and promote - it never edits the live rule set itself.
 | postgres | 5433 (→5432 in-container) | Timescale hypertable, `point_history` |
 | jaeger | 16686 (UI), 4318 (OTLP HTTP) | Traces — every process exports here |
 | grafana | 3033 (→3000 in-container) | Dashboards over Postgres — a "Timberdoodle Postgres" datasource and a starter "Timberdoodle: Point History" dashboard are auto-provisioned (`grafana/provisioning/`). Login is the image default `admin`/`admin` unless `GRAFANA_ANON_ENABLED=true` in `.env` (off by default — see `.env.example`; changing it needs `docker compose up -d grafana` to recreate the container, since compose only reads `.env` at container start, not while it's already running) |
-| gateway | 8080 | Basic-auth-gated reverse proxy in front of ingest/fault/derivation/validate APIs |
+| gateway | 8080 | JWT-auth-gated (nginx + njs) reverse proxy in front of every API — see "Gateway auth" above |
 
 Postgres is remapped to host port 5433, not the default 5432, to avoid
 colliding with a locally-running Postgres instance. `ingest_api`/`fault_api`/

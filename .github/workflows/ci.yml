@@ -29,14 +29,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev,validate]"
-      # gateway/*.htpasswd are gitignored and not auto-generated (see
-      # CLAUDE.md) - docker compose up refuses to start the gateway
-      # service without them. Throwaway CI-only credentials, never
-      # committed.
-      - run: |
-          sudo apt-get update && sudo apt-get install -y apache2-utils
-          htpasswd -bc gateway/read.htpasswd ci-reader ci-reader-pw
-          htpasswd -bc gateway/write.htpasswd ci-writer ci-writer-pw
       - run: docker compose up -d --build
         env:
           # Throwaway CI-only secrets so auth_api.py/gateway can start at

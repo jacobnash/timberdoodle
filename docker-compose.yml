@@ -168,16 +168,16 @@ services:
     ports:
       - "8080:80"
     environment:
-      # Blank-safe (see .env.example) - inert until auth_api exists and
-      # a location is actually cut over to js_access (Phase 2 migration
-      # path, steps 2-4).
-      TIMBERDOODLE_JWT_SECRET: ${TIMBERDOODLE_JWT_SECRET:-}
-      TIMBERDOODLE_GATEWAY_SECRET: ${TIMBERDOODLE_GATEWAY_SECRET:-}
+      # Required now (not blank-safe like the daemon-env anchor's copies
+      # of these) - every location is cut over to js_access as of the
+      # Phase 2 migration path's final step, so an unset secret here
+      # means the gateway can't verify anything at all, not just one
+      # not-yet-migrated route.
+      TIMBERDOODLE_JWT_SECRET: ${TIMBERDOODLE_JWT_SECRET:?set in .env - see .env.example}
+      TIMBERDOODLE_GATEWAY_SECRET: ${TIMBERDOODLE_GATEWAY_SECRET:?set in .env - see .env.example}
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./gateway/njs:/etc/nginx/njs:ro
-      - ./gateway/read.htpasswd:/etc/nginx/read.htpasswd:ro
-      - ./gateway/write.htpasswd:/etc/nginx/write.htpasswd:ro
       - ./ui:/usr/share/nginx/ui:ro
     depends_on:
       - ingest_api

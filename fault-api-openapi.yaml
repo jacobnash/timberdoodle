@@ -18,9 +18,8 @@ servers:
   - url: http://localhost:8080/fault
     description: >-
       Via the gateway (docker-compose) - the actual externally-reachable
-      path. GET requests need HTTP basic auth against
-      gateway/read.htpasswd; POST/DELETE additionally need
-      gateway/write.htpasswd.
+      path. Every route is JWT-verified in nginx itself (gateway/njs/) -
+      see README's "Gateway auth" section for how to get a token.
   - url: http://localhost:8002
     description: >-
       Direct - only reachable if you're running this process bare-metal

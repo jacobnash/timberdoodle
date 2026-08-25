@@ -36,12 +36,11 @@ servers:
   - url: http://localhost:8080/derivation
     description: >-
       Via the gateway (docker-compose) - the actual externally-reachable
-      path. GET requests need HTTP basic auth against
-      gateway/read.htpasswd; POST/DELETE (including the code-exec
-      endpoints this API warns about above) additionally need
-      gateway/write.htpasswd. The gateway is a checkpoint at the network
-      edge, not a substitute for the localhost-only posture above -
-      don't expose it past that boundary either.
+      path. Every route is JWT-verified in nginx itself (gateway/njs/) -
+      see README's "Gateway auth" section for how to get a token. The
+      gateway is a checkpoint at the network edge, not a substitute for
+      the localhost-only posture above - don't expose it past that
+      boundary either.
   - url: http://localhost:8003
     description: >-
       Direct - only reachable if you're running this process bare-metal

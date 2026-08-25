@@ -94,13 +94,11 @@ external callers talk to — `localhost:8080`. It does two jobs:
   demo UI at `/ui/` directly (an nginx `alias` onto `./ui/`, not a fourth
   process). The three API containers no longer publish host ports at
   all — the gateway is the only way in from outside the Docker network.
-- **HTTP basic auth, split by method** via nginx's `limit_except GET`:
-  `GET` requests check against `gateway/read.htpasswd`; everything else
-  (`POST`/`DELETE` — the mutating calls, including the derivation API's
-  code-exec endpoints) additionally checks `gateway/write.htpasswd`. A
-  write credential doesn't automatically satisfy the read check — they're
-  separate files by design. Both are gitignored; generate your own with
-  `htpasswd -bc` (see the repo's README quick start).
+- **JWT auth, enforced in nginx itself** via njs (`gateway/njs/`): every
+  request is verified against a per-route policy table
+  (`gateway/njs/policy.js`) before it reaches a backend — no per-backend
+  Python auth code. See the repo's README "Gateway auth" section for how
+  to create an org/admin and get a token.
 
 This is deliberately *not* a merge of the three API processes into one
 codebase — they stay separate builds/images/restarts, same as before,

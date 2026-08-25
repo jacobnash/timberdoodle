@@ -10,10 +10,10 @@ test_faults.py assumes Postgres is already up rather than starting it.
 
 Needs the `gateway` and `auth_api` services (and whichever backend a
 given test targets) actually running with real
-TIMBERDOODLE_JWT_SECRET/TIMBERDOODLE_GATEWAY_SECRET set - if those are
-blank (the default until Phase 2's rollout reaches your environment),
-every request here 401s and these tests fail loudly, which is the
-correct behavior, not a bug in the test.
+TIMBERDOODLE_JWT_SECRET/TIMBERDOODLE_GATEWAY_SECRET set - `docker
+compose up -d` now refuses to start the gateway at all without both
+(see .env.example), so there's no more "blank secret" case to worry
+about.
 """
 
 import time
@@ -108,29 +108,16 @@ def test_viewer_role_gets_403_on_admin_only_route(org_and_admin_token):
 
 
 @pytest.mark.integration
-def test_existing_htpasswd_gated_services_are_unaffected():
-    """Regression check for the still-not-cut-over locations (Phase 2's
-    incremental migration path) - confirms this rollout hasn't silently
-    changed behavior for routes that haven't been flipped to js_access
-    yet. Deliberately doesn't use org_and_admin_token - nothing here
-    needs an org, and every other test in this file does, so skipping it
-    here avoids contributing to the shared per-IP login rate limit
-    tested below.
-
-    Update this list as each location gets cut over (see git log for
-    "Cut over /X/ to gateway-enforced auth" commits) - /validate/,
-    /derivation/, /fault/ are done; /ingest/ remains."""
-    for path in ("/ingest/openapi.yaml",):
-        resp = requests.get(f"{BASE}{path}")
-        assert resp.status_code == 401, f"{path} should still require htpasswd creds, got {resp.status_code}"
-
-
-@pytest.mark.integration
-def test_cutover_locations_no_longer_use_htpasswd():
-    """The flip side of the check above - confirms /validate/,
-    /derivation/, /fault/ really did move to the new model (public GET
-    routes no longer need any credential at all, htpasswd or otherwise)."""
-    for path in ("/validate/openapi.yaml", "/derivation/openapi.yaml", "/fault/openapi.yaml"):
+def test_all_cutover_locations_no_longer_use_htpasswd():
+    """Phase 2's incremental migration path is complete - all four
+    locations (/validate/, /derivation/, /fault/, /ingest/) moved from
+    htpasswd/auth_basic to js_access. Confirms public GET routes on each
+    no longer need any credential at all, htpasswd or otherwise.
+    Deliberately doesn't use org_and_admin_token - nothing here needs an
+    org, and every other test in this file does, so skipping it here
+    avoids contributing to the shared per-IP login rate limit tested
+    below."""
+    for path in ("/validate/openapi.yaml", "/derivation/openapi.yaml", "/fault/openapi.yaml", "/ingest/openapi.yaml"):
         resp = requests.get(f"{BASE}{path}")
         assert resp.status_code == 200, f"{path} should be public under gateway-enforced auth, got {resp.status_code}"
 

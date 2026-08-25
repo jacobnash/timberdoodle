@@ -19,14 +19,13 @@ integrations). This file is gotchas only — don't duplicate those.
 - **Env vars**: `.env.example` at the repo root is the single source of
   truth for every var any process reads — check there before grepping
   source.
-- **Gateway auth files are gitignored and not auto-generated.**
-  `docker compose up` will fail to start the `gateway` service until you
-  run `htpasswd -bc gateway/read.htpasswd <user> <pass>` and the same for
-  `write.htpasswd` (see README quick start). `-bc` creates-and-overwrites
-  — if these files already exist (e.g. from a previous session) this
-  silently replaces whatever credentials were in them; that's normal and
-  expected, not a sign something's broken, but you'll need the new
-  credentials for every subsequent request.
+- **Gateway auth requires `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET`
+  in `.env` — `docker compose up` refuses to start the `gateway` service
+  without both (see README quick start).** No more htpasswd files — every
+  route on every API is JWT-verified in nginx itself (`gateway/njs/`,
+  policy in `gateway/njs/policy.js`), not per-backend Python auth code.
+  `POST /auth/orgs` (public) creates the first admin account;
+  `POST /auth/login` exchanges credentials for a token.
 - **Gateway caches upstream addresses at its own startup.** If you
   restart a backend API container independently (e.g. `docker compose up
   -d --build ingest_api` after a code change) without also restarting
@@ -57,19 +56,6 @@ integrations). This file is gotchas only — don't duplicate those.
   (`ontology/`, `shacl_validate.py`, `validate_api.py` on port 8005) — the
   doc itself wasn't deleted (kept as design rationale), don't treat its
   "planned, not started" status line as current.
-- **Gateway auth is mid-migration, two systems at once — see
-  `~/.claude/plans/okay-i-want-to-tingly-hamster.md`'s Phase 2 for the
-  full design.** `/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`
-  still use the old htpasswd/`auth_basic` gate; only the new `/auth/*`
-  (`auth_api.py`) uses the new model — JWTs verified in nginx itself via
-  njs (`gateway/njs/`), not per-backend Python code. `auth_api.py`
-  refuses to start without `TIMBERDOODLE_JWT_SECRET` set; the gateway's
-  own JWT verification and the `X-Gateway-Secret` backend
-  defense-in-depth check (`gateway_auth.py`) both need
-  `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET` too — both
-  blank by default (`.env.example`) so the rest of the stack keeps
-  working before you configure them, but `/auth/*` itself won't function
-  at all until you do.
 - **`gateway/njs/*.js` are ES modules regardless of file extension** —
   njs always treats them as modules. Plain `node` needs
   `gateway/njs/package.json`'s `"type": "module"` to agree, or

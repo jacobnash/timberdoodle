@@ -52,7 +52,6 @@ ponytail: real gap, not silently worked around - add a `rate` fault type
 """
 
 import argparse
-import base64
 import json
 import os
 import urllib.request
@@ -66,18 +65,43 @@ from timberdoodle.store import BRICK as BRICK_NS
 BRICK = str(BRICK_NS)
 BUILDING_URI = URIRef("urn:equip:site/building-1")
 
+# Cached at module scope - one login per script run, not one per POST.
+# Both derivation_api and fault_api are behind the gateway's
+# js_access-enforced /derivation//fault/ locations now (see
+# gateway/nginx.conf), which need a real Bearer JWT, not the old
+# write.htpasswd Basic auth.
+_bearer_token: str | None = None
 
-def _post(url: str, body: dict) -> dict | None:
+
+def _login(auth_api_url: str) -> str:
+    global _bearer_token
+    if _bearer_token is not None:
+        return _bearer_token
+    email = os.environ.get("TIMBERDOODLE_ADMIN_EMAIL")
+    password = os.environ.get("TIMBERDOODLE_ADMIN_PASSWORD")
+    if not email or not password:
+        raise SystemExit(
+            "TIMBERDOODLE_ADMIN_EMAIL/TIMBERDOODLE_ADMIN_PASSWORD must be set - "
+            "an existing admin account this script logs in as (see POST /auth/orgs "
+            "in the README to create one if you don't have one yet)."
+        )
+    req = urllib.request.Request(
+        f"{auth_api_url}/login",
+        data=json.dumps({"email": email, "password": password}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        _bearer_token = json.loads(resp.read())["token"]
+    return _bearer_token
+
+
+def _post(url: str, body: dict, auth_api_url: str) -> dict | None:
     data = json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    # The APIs sit behind the gateway's write.htpasswd gate now (see
-    # gateway/nginx.conf) - TIMBERDOODLE_WRITE_USER/PASSWORD supply the
-    # same credentials `htpasswd -bc gateway/write.htpasswd` set up.
-    write_user = os.environ.get("TIMBERDOODLE_WRITE_USER")
-    write_password = os.environ.get("TIMBERDOODLE_WRITE_PASSWORD")
-    if write_user:
-        token = base64.b64encode(f"{write_user}:{write_password}".encode()).decode()
-        headers["Authorization"] = f"Basic {token}"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {_login(auth_api_url)}",
+    }
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req) as resp:
         body_bytes = resp.read()
@@ -375,6 +399,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--derivation-api", default="http://localhost:8080/derivation")
     parser.add_argument("--fault-api", default="http://localhost:8080/fault")
+    parser.add_argument("--auth-api", default="http://localhost:8080/auth")
     parser.add_argument("--oxigraph", default="http://localhost:7878")
     parser.add_argument("--skip-structure", action="store_true", help="skip the hasPart/equip-tagging structural setup")
     parser.add_argument(
@@ -390,11 +415,11 @@ def main() -> None:
         return
 
     for derivation in DERIVATIONS:
-        result = _post(f"{args.derivation_api}/derivations", derivation)
+        result = _post(f"{args.derivation_api}/derivations", derivation, args.auth_api)
         print(f"derivation {derivation['name']}: created id={result['id']}")
 
     for rule in FAULT_RULES:
-        result = _post(f"{args.fault_api}/rules", rule)
+        result = _post(f"{args.fault_api}/rules", rule, args.auth_api)
         print(f"fault rule {rule['name']}: created id={result['id']}")
 
 
