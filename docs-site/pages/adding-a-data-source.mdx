@@ -1,0 +1,387 @@
+---
+title: Adding a Data Source
+---
+
+There are two genuinely different shapes of "new data source" here, and
+they live in two different repos. Picking the right one first matters —
+they don't share a recipe.
+
+## Push, protocol-native: goes in FBF
+
+If the source speaks a real building-automation protocol with a live
+connection (BACnet, Modbus, a native MQTT device) — that's
+[FBF](../fbf)'s job, not Timberdoodle's. FBF already has a documented,
+repeatable recipe for this: `../fbf/docs/adding-a-new-source.md`. The
+short version — find a mature client library for the protocol, write a
+`<protocol>_bridge.py` that publishes readings through FBF's frozen MQTT
+envelope (`fbf.mqtt_sink.publish_reading()`), and Timberdoodle's
+`mqtt_listener.py` picks it up unchanged. No code on this side.
+
+## Pull, periodic-API: goes in Timberdoodle
+
+If the source is a REST/HTTP API you poll on an interval — a Haystack
+server, an energy-benchmarking service like ENERGY STAR Portfolio
+Manager, a utility data API (e.g. a Green Button-style program) — that's
+a **puller**, and it belongs in this repo. `haystack_puller.py` is the
+one that exists today; everything below is written so you can build a
+new one — say `energy_star_puller.py` — **from this page alone**, without
+opening `haystack_puller.py` or any other source file. Where something
+is genuinely custom per source (auth, the remote API's shape), that's
+called out explicitly as the one part you have to write yourself.
+
+### The three files, one per puller
+
+| File | Role |
+|---|---|
+| `src/timberdoodle/<source>_client.py` | Talks to the remote API. Auth, HTTP, response parsing. The only fully custom file. |
+| `src/timberdoodle/<source>_pull_state.py` | A Postgres watermark table, one row per point/entity. Copy the template below verbatim, rename. |
+| `src/timberdoodle/<source>_puller.py` | The daemon: poll loop, calls the client, calls Timberdoodle's shared ingest functions, updates the checkpoint. Copy the template below, fill in the marked gaps. |
+
+### 1. `<source>_client.py` — write this yourself
+
+No template — this is the one file that has to match the remote API,
+which you know and this doc doesn't. Use `requests` for HTTP — it's
+already a project dependency (`haystack_client.py` and `remote_store.py`
+both use it), don't add a new one. Exact shape the puller template below
+depends on:
+
+- **Constructor**: `__init__(self, base_url: str, user: str, password: str)`
+  — three positional args, matching how `main()` instantiates it below.
+  If your API authenticates differently (an API key, OAuth token), still
+  take exactly these three params and fold the difference inside the
+  constructor/auth method — don't change the call site in `main()`.
+- **A method that lists equipment**, returning a **list** (not a bare
+  generator/iterator — the puller template calls `len()` on the result)
+  of dict-like records, each with an `"id"` key.
+- **A method that lists points**, same shape, plus an `"equipRef"` key
+  on any record that belongs to a piece of equipment.
+- **A method that reads one point's history over a time range**,
+  returning a **list** of `(timestamp: float, value)` pairs.
+- **Exceptions**: raise anything (an auth failure, a network error, a
+  malformed response) — the puller's poll loop catches `Exception`
+  generically per cycle and retries next tick. No special exception type
+  needed.
+
+Keep HTTP/auth/parsing entirely inside this file — nothing else should
+need to know how the remote API's requests are shaped.
+
+### 2. `<source>_pull_state.py` — copy this verbatim, rename
+
+```python
+"""
+Durable per-point watermark for <source>_puller.py - "queried this
+point's history through this timestamp," not "last row's timestamp" (an
+empty poll window still advances it, or the same empty range gets
+re-queried forever).
+"""
+
+import psycopg
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS <source>_pull_checkpoint (
+    point_uri      TEXT NOT NULL PRIMARY KEY,
+    last_pulled_ts DOUBLE PRECISION NOT NULL
+);
+"""
+
+
+def ensure_schema(conn: psycopg.Connection) -> None:
+    conn.execute(SCHEMA)
+
+
+def get_checkpoint(conn: psycopg.Connection, point_uri: str) -> float | None:
+    row = conn.execute(
+        "SELECT last_pulled_ts FROM <source>_pull_checkpoint WHERE point_uri = %s",
+        (point_uri,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def set_checkpoint(conn: psycopg.Connection, point_uri: str, ts: float) -> None:
+    conn.execute(
+        """
+        INSERT INTO <source>_pull_checkpoint (point_uri, last_pulled_ts)
+        VALUES (%s, %s)
+        ON CONFLICT (point_uri) DO UPDATE SET last_pulled_ts = EXCLUDED.last_pulled_ts
+        """,
+        (point_uri, ts),
+    )
+```
+
+Replace every `<source>` (including in the SQL table name) with your
+source's short name, e.g. `energy_star`.
+
+### 3. `<source>_puller.py` — copy this, confirm the two marked spots
+
+This is the actual daemon. The two `# TODO` blocks are mostly already
+written — they're marked because they're the two places that call into
+your `<source>_client.py`, so double-check the method names
+(`list_equipment`, `list_points`, `read_history`) match what you wrote
+in step 1. Everything else calls real, existing Timberdoodle functions
+with their real signatures — nothing here is invented or simplified for
+the example.
+
+```python
+"""
+Pulls points/equipment/history from <source> and ingests through the same
+pipeline every other source uses (ingest.py, mapping.py).
+"""
+
+import argparse
+import os
+import time
+from datetime import datetime, timezone
+
+from timberdoodle import mapping, tracing
+from timberdoodle.<source>_client import <Source>Client   # you write this
+from timberdoodle.<source>_pull_state import ensure_schema, get_checkpoint, set_checkpoint
+from timberdoodle.ingest import (
+    ingest_haystack_equip_tags,
+    ingest_reading,
+    ingest_tags,
+    link_equip_ref,
+    topic_to_point_uri,
+)
+from timberdoodle.remote_store import RemoteStore
+from timberdoodle.timeseries import connect
+
+tracer = tracing.get_tracer(__name__)
+
+
+def _namespaced_ref(source_id: str, ref: str) -> str:
+    return f"{source_id}:{ref}"
+
+
+def pull_equip(client, store, source_id: str) -> None:
+    # TODO: replace client.list_equipment() with your client's real method,
+    # returning an iterable of dict-like records each with an "id" key.
+    # ingest_haystack_equip_tags(store, ref, tags) writes the dict as
+    # HAYSTACK:<tag> triples on urn:equip:haystack:{ref}, ref pre-namespaced
+    # below so it can't collide with another source's equipment ids.
+    for row in client.list_equipment():
+        ref = row.get("id")
+        if not ref:
+            continue
+        equip_uri = ingest_haystack_equip_tags(store, _namespaced_ref(source_id, ref), row)
+        mapping.classify_point(store, equip_uri)  # equipment classification, same rule engine as points
+
+
+def pull_points(client, store, ts_conn, source_id: str, backfill_days: float) -> None:
+    now = time.time()
+    # TODO: replace client.list_points() with your client's real method,
+    # returning an iterable of dict-like records each with an "id" key and,
+    # if your source has one, an "equipRef" key pointing at an equipment id.
+    for row in client.list_points():
+        ref = row.get("id")
+        if not ref:
+            continue
+
+        # Namespace equipRef *before* ingest_tags writes it, so it matches
+        # the equip URI pull_equip just created - link_equip_ref keys off
+        # this stored tag value verbatim.
+        if row.get("equipRef"):
+            row = {**row, "equipRef": _namespaced_ref(source_id, row["equipRef"])}
+
+        topic = f"<source>/{source_id}/{ref}"
+        point_uri = ingest_tags(store, topic, row)
+        link_equip_ref(store, point_uri)  # resolves the equipRef tag above into a real brick:isPointOf edge, if present
+        mapping.classify_point_with_fallback(store, point_uri)
+
+        checkpoint = get_checkpoint(ts_conn, str(point_uri))
+        start = checkpoint if checkpoint is not None else now - backfill_days * 86400
+        _pull_history(client, store, ts_conn, topic, ref, start, now)
+        set_checkpoint(ts_conn, str(point_uri), now)
+
+
+def _pull_history(client, store, ts_conn, topic: str, ref: str, start_ts: float, end_ts: float) -> None:
+    if start_ts >= end_ts:
+        return
+    with tracer.start_as_current_span("<source>_puller.pull_history") as span:
+        span.set_attribute("point_uri", str(topic_to_point_uri(topic)))
+        # TODO: replace with your client's real history-read method. It
+        # must return an iterable of (timestamp: float, value) pairs.
+        rows = client.read_history(ref, start_ts, end_ts)
+        span.set_attribute("row_count", len(rows))
+        for ts, value in rows:
+            ingest_reading(store, ts_conn, topic, value, ts=ts)
+
+
+def pull_once(client, store, ts_conn, source_id: str, backfill_days: float) -> None:
+    with tracer.start_as_current_span("<source>_puller.pull_once") as span:
+        span.set_attribute("source_id", source_id)
+        pull_equip(client, store, source_id)
+        pull_points(client, store, ts_conn, source_id, backfill_days)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", default=os.environ.get("<SOURCE>_URL"), required=os.environ.get("<SOURCE>_URL") is None)
+    parser.add_argument("--user", default=os.environ.get("<SOURCE>_USER"), required=os.environ.get("<SOURCE>_USER") is None)
+    parser.add_argument("--password", default=os.environ.get("<SOURCE>_PASSWORD", ""))
+    parser.add_argument("--source-id", default=os.environ.get("<SOURCE>_SOURCE_ID", "<source>"))
+    parser.add_argument("--tick-seconds", type=float, default=300.0)
+    parser.add_argument("--backfill-days", type=float, default=7.0)
+    args = parser.parse_args()
+
+    tracing.init_tracing("timberdoodle-<source>-puller")
+
+    store = RemoteStore()
+    ts_conn = connect()
+    ensure_schema(ts_conn)
+
+    client = <Source>Client(args.url, args.user, args.password)  # you write this class
+
+    print(f"pulling {args.source_id!r} from {args.url} every {args.tick_seconds}s")
+    while True:
+        try:
+            pull_once(client, store, ts_conn, args.source_id, args.backfill_days)
+        except Exception as exc:
+            print(f"pull cycle failed: {exc!r}")
+        time.sleep(args.tick_seconds)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Reading the `# TODO` blocks**: everything else in this file — the
+poll loop shape, the `try/except` around each cycle, the checkpoint
+calls, `ingest_tags`/`link_equip_ref`/`ingest_reading`/
+`mapping.classify_point_with_fallback`, the tracer spans, the
+`argparse`/env-var pairing — is real, load-bearing Timberdoodle code you
+can rely on as documented. The functions imported from `timberdoodle.ingest`
+and `timberdoodle.mapping` here are the actual shared write path every
+source (MQTT, HTTP push, Haystack pull) goes through — nothing about
+Oxigraph or Postgres needs writing from scratch.
+
+### The shared functions, exact signatures
+
+```python
+# timberdoodle.ingest
+def ingest_reading(store, ts_conn, topic: str, value, ts: float | None = None) -> URIRef
+    # Writes value to Postgres (point_history), asserts point identity in
+    # Oxigraph once. Point identity = urn:point:{topic}.
+
+def ingest_tags(store, topic: str, tags: dict, ts: float | None = None) -> URIRef
+    # Writes a dict of tags as HAYSTACK:<tag> triples on the point.
+    # Marker tags (value True) become HAYSTACK:hasTag; anything else
+    # becomes HAYSTACK:<tagName> with that literal value.
+
+def ingest_haystack_equip_tags(store, ref: str, tags: dict) -> URIRef
+    # Same tag-writing as ingest_tags, but for equipment: writes to
+    # urn:equip:haystack:{ref}. Despite the name, this is generic over
+    # any source that identifies equipment by an opaque ref string
+    # rather than a topic_prefix - namespace `ref` yourself first
+    # (see _namespaced_ref above) so it can't collide with another
+    # source's equipment ids.
+
+def link_equip_ref(store, point_uri) -> URIRef | None
+    # If the point has a HAYSTACK:equipRef tag (already written by
+    # ingest_tags if your `row` dict included one), resolves it into a
+    # real brick:isPointOf edge against the matching equip URI. Returns
+    # None (not an error) if there's no equipRef tag, or the equip
+    # hasn't been ingested yet.
+
+def link_point_to_equip(store, point_uri, equip_uri) -> None
+    # Direct version of the above - use this instead of link_equip_ref
+    # when you already have both URIs in hand and don't need tag-based
+    # resolution.
+
+# timberdoodle.mapping
+def classify_point(store, point_uri, rules: list[dict] | None = None) -> tuple[str, str | None]
+    # Rule-based Brick classification (rules/haystack_to_brick.yaml by
+    # default) over whatever HAYSTACK:hasTag triples are on this URI.
+    # Works identically for a point or an equipment URI.
+
+def classify_point_with_fallback(store, point_uri, rules=None, llm_classify=None) -> tuple[str, str | None]
+    # classify_point, plus an LLM fallback when llm_classify is supplied
+    # (autotag.py's job, not a puller's - leave llm_classify=None here).
+
+# timberdoodle.remote_store
+class RemoteStore:
+    def __init__(self, base_url: str = None)
+        # Reads OXIGRAPH_URL env var if base_url isn't passed, falls
+        # back to http://localhost:7878.
+
+# timberdoodle.timeseries
+def connect(dsn: str = DEFAULT_DSN) -> psycopg.Connection
+    # DEFAULT_DSN reads TIMBERDOODLE_PG_DSN env var, falls back to
+    # postgresql://timberdoodle:timberdoodle@localhost:5433/timberdoodle.
+
+# timberdoodle.tracing
+def init_tracing(service_name: str) -> None
+def get_tracer(name: str)
+```
+
+### Config and deployment
+
+- **Env var + CLI flag pair, always.** Every setting needs both an
+  `os.environ.get("SOURCE_ENV_VAR")` default and a `--flag` override, as
+  in the `main()` template above.
+- **One real gotcha**: under `docker compose`, an env var declared as
+  `${VAR:-}` in `docker-compose.yml` is *always* present in the
+  container (blank if unset on the host) — so an `argparse`
+  `required=env_var is None` check never fires there. Don't rely on
+  argparse to enforce a required remote-API credential when the puller
+  runs under compose; document the real failure mode instead (starts
+  fine, fails every pull cycle silently) like [Haystack Puller](/haystack-puller)
+  does.
+- **Own compose profile.** Add to `docker-compose.yml`:
+
+```yaml
+  <source>_puller:
+    build: .
+    command: python -m timberdoodle.<source>_puller
+    profiles: ["<source>-pull"]
+    environment:
+      <<: *daemon-env
+      <SOURCE>_URL: ${<SOURCE>_URL:-}
+      <SOURCE>_USER: ${<SOURCE>_USER:-}
+      <SOURCE>_PASSWORD: ${<SOURCE>_PASSWORD:-}
+      <SOURCE>_SOURCE_ID: ${<SOURCE>_SOURCE_ID:-<source>}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oxigraph:
+        condition: service_started
+```
+
+  Gated behind its own profile so it's opt-in — never part of the
+  default `docker compose up -d` — same as `haystack_puller`'s
+  `haystack-pull` profile.
+- Add the four `<SOURCE>_*` env vars to `.env.example`, in the same
+  annotated style as the existing `REMOTE_HAYSTACK_*` block.
+
+### Sketching ENERGY STAR / utility data
+
+Neither of these exists yet. Applying the pattern above:
+
+**ENERGY STAR Portfolio Manager** exposes building/meter-level energy
+data through its own web service, authenticated per-account, at a much
+coarser cadence than live telemetry (monthly/periodic bills, not
+five-minute readings) — so `--tick-seconds` would be daily-or-slower,
+and the "point" being pulled is more like a meter or a whole building's
+energy total than a single BACnet point. Verify the real API's auth and
+data shape against ENERGY STAR's own current documentation before
+implementing `energy_star_client.py` — nothing here assumes a specific
+endpoint shape.
+
+**A utility data API** (e.g. a Green Button-style "Share My Data"
+program some utilities, including PG&E, support) is typically OAuth
+rather than the SCRAM-style credential pair Haystack uses — the client
+module would look the most different from a Haystack one here, but
+everything downstream of "I have a value and a timestamp for this
+point" is the same `ingest_reading` call. Same caveat: verify the real
+API before implementing.
+
+### Checklist for a new puller
+
+1. `<source>_client.py` — auth + the minimum read operations you need (see "write this yourself" above).
+2. `<source>_pull_state.py` — the template above, verbatim, renamed.
+3. `<source>_puller.py` — the template above, with the two `# TODO` blocks filled in.
+4. Add the compose service above to `docker-compose.yml`, behind its own profile.
+5. Add its env vars to `.env.example`.
+6. Write a `docs-site/pages/<source>-puller.mdx` page — [Haystack Puller](/haystack-puller) is the template — and add it to `zudoku.config.tsx`'s nav array and `introduction.mdx`'s link list.
+7. Add a smoke-test note to the main README, same shape as the "Haystack pull (optional)" section.

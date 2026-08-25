@@ -16,6 +16,11 @@ Proven live, twice, against two independent real Haxall 4.0.6 instances —
 `hisWrite` through Axon lands in Timberdoodle's Postgres (confirmed via
 this API's own `GET /history`), and `hisRead` reads it back correctly.
 
+This is push-mode: something is installed into Haxall so it calls out to
+Timberdoodle. For the opposite direction — Timberdoodle pulling from a
+remote Haystack/Haxall/SkySpark server with nothing installed on the
+other side — see [Haystack Puller](/haystack-puller).
+
 ## The real extension point
 
 ```fantom

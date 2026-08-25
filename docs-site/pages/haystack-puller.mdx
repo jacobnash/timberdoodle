@@ -1,0 +1,97 @@
+---
+title: Haystack Puller
+---
+
+`haystack_puller.py` pulls points, equipment, and history from a remote
+[Project Haystack](https://project-haystack.org/) REST server — Haxall,
+SkySpark, or any other Haystack-compliant server — and ingests it through
+the exact same pipeline every other source uses (`ingest.py`, `mapping.py`).
+Point it at a read-only API user on an existing Haxall/SkySpark deployment
+and Timberdoodle classifies the same already-tagged points/equipment
+through its own Brick mapping, for comparison, with no change to the
+target system.
+
+This is the opposite direction from [Haxall Drop-In](/haxall-drop-in):
+that page installs a Fantom extension *into* Haxall so it pushes history
+to Timberdoodle. This is pull-mode — Timberdoodle reaches out to a remote
+Haystack server on its own poll loop, nothing is installed on the other
+side.
+
+## Enabling it
+
+It's **not** part of the default stack — plain `docker compose up -d`
+does not start it. It's gated behind a compose profile:
+
+```bash
+docker compose --profile haystack-pull up -d haystack_puller
+```
+
+Set `REMOTE_HAYSTACK_URL` and `REMOTE_HAYSTACK_USER` first. **The
+container doesn't actually enforce this**: `docker-compose.yml` passes
+both through as `${VAR:-}`, so they're always present in the container's
+environment (blank if you never set them), and the code's "required"
+check only fires when the variable is completely absent — which it never
+is under `docker compose`. Leave them unset and the container starts
+clean, then fails every pull cycle against an empty URL and retries
+silently forever, with no startup error to tell you why. Only running the
+module directly (`python -m timberdoodle.haystack_puller`, no env var set
+at all and no `--haystack-url` flag) actually hits the "required"
+argparse error. See the repo's `.env.example` or the table below.
+
+## How it works
+
+- **Auth**: `haystack_client.HaystackClient` implements Haystack's
+  SCRAM-SHA-256 handshake from scratch over `requests` — no third-party
+  Haystack client dependency.
+- **Progress tracking**: `haystack_pull_state.py` keeps a small Postgres
+  watermark table (`haystack_pull_checkpoint`, keyed by point URI) so a
+  restart resumes from the last successful pull instead of re-fetching
+  history from scratch.
+- **Ingest**: routes through `ingest_haystack_equip_tags`, `ingest_tags`,
+  `link_equip_ref`, and `ingest_reading` — the same functions
+  `mqtt_listener.py` and `ingest_api.py` use — so results land in Oxigraph
+  and Postgres identically to any other source, and equipment gets
+  classified via `rules/haystack_equip_to_brick.yaml`.
+- Each remote ref is namespaced as `<source_id>:<ref>` so multiple sources
+  can't collide.
+
+## Configuration
+
+| Env var | CLI flag | Default | Required |
+|---|---|---|---|
+| `REMOTE_HAYSTACK_URL` | `--haystack-url` | — | yes |
+| `REMOTE_HAYSTACK_USER` | `--haystack-user` | — | yes |
+| `REMOTE_HAYSTACK_PASSWORD` | `--haystack-password` | `""` | no |
+| `REMOTE_HAYSTACK_SOURCE_ID` | `--source-id` | `haxall` | no |
+| — | `--point-filter` | `point` | no |
+| — | `--equip-filter` | `equip` | no |
+| — | `--tick-seconds` | `300.0` | no |
+| — | `--backfill-days` | `7.0` | no |
+
+`--point-filter`/`--equip-filter` are Haystack filter expressions passed
+straight to the remote server's `read` op. `--backfill-days` is how far
+back history is pulled the first time a point is seen; after that, the
+watermark table takes over. `--tick-seconds` is deliberately coarse — it
+polls a remote server, not Timberdoodle's own MQTT broker.
+
+To run it standalone, outside compose:
+
+```bash
+python -m timberdoodle.haystack_puller \
+  --haystack-url https://your-haxall-host \
+  --haystack-user readonly
+```
+
+## Known v1 limitations
+
+- **Poll-only** — no Haystack `watchSub`/subscription support.
+- **Single remote source per process** — run multiple `haystack_puller`
+  instances (different `--source-id`) if you need to pull from more than
+  one remote server.
+- A single failed pull cycle (remote hiccup, transient auth failure) logs
+  and retries on the next tick rather than crashing the process.
+
+This is also the reference implementation for any future pull-style
+source (ENERGY STAR, a utility data API, ...) — see
+[Adding a Data Source](/adding-a-data-source) for what's generic here
+versus what's specific to Haystack.
