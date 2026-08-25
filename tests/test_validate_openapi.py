@@ -38,8 +38,12 @@ def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
     validator_cls(schema, registry=registry).validate(instance)
 
 
+GATEWAY_SECRET = "test-gateway-secret"
+
+
 @pytest.fixture
-def live_server():
+def live_server(monkeypatch):
+    monkeypatch.setenv("TIMBERDOODLE_GATEWAY_SECRET", GATEWAY_SECRET)
     store = RemoteStore()
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(store))
     server.daemon_threads = True
@@ -59,8 +63,14 @@ def test_get_openapi_yaml_serves_the_real_spec_file(live_server):
 
 
 @pytest.mark.integration
-def test_post_validate_matches_documented_schema(live_server, spec):
+def test_post_validate_without_gateway_secret_is_401(live_server):
     resp = requests.post(f"{live_server}/validate")
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_post_validate_matches_documented_schema(live_server, spec):
+    resp = requests.post(f"{live_server}/validate", headers={"X-Gateway-Secret": GATEWAY_SECRET})
     assert resp.status_code == 200
     body = resp.json()
     _assert_matches_schema(

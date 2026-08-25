@@ -12,7 +12,7 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from timberdoodle import docs_ui, tracing
+from timberdoodle import docs_ui, gateway_auth, tracing
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.shacl_validate import graph_from_remote_store, load_shapes, validate_graph
 
@@ -34,6 +34,10 @@ def make_handler(store):
     class ValidateHandler(BaseHTTPRequestHandler):
         def do_POST(self):
             if self.path == "/validate":
+                if not gateway_auth.request_came_through_gateway(self):
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 self._post_validate()
                 return
             self.send_response(404)

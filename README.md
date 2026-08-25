@@ -56,21 +56,21 @@ The gateway is moving from HTTP Basic (htpasswd) to JWT tokens verified
 in nginx itself via njs — incrementally, one location at a time, not a
 flag-day cutover. Today:
 
-- **`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`** still use
-  HTTP Basic: `GET` needs a `gateway/read.htpasswd` credential, anything
-  else (`POST`/`DELETE`) needs `gateway/write.htpasswd` (a write
-  credential doesn't also satisfy read unless added to both files). Both
-  files are gitignored — generate your own with `htpasswd -bc` as shown
-  above.
-- **`/auth/*`** (the new `auth_api`) uses the new model instead: `POST
+- **`/ingest/*`, `/fault/*`, `/derivation/*`** still use HTTP Basic: `GET`
+  needs a `gateway/read.htpasswd` credential, anything else
+  (`POST`/`DELETE`) needs `gateway/write.htpasswd` (a write credential
+  doesn't also satisfy read unless added to both files). Both files are
+  gitignored — generate your own with `htpasswd -bc` as shown above.
+- **`/validate/*` and `/auth/*`** use the new model instead: a real JWT,
+  verified in nginx itself (`gateway/njs/`), with role/route policy
+  enforced by `gateway/njs/policy.js` — not per-API Python code. `POST
   /auth/orgs` creates a new org plus its first admin user (public, no
   credential needed — there's no other admin who could authorize a
   brand-new org); `POST /auth/login` exchanges email/password for a JWT;
-  every other `/auth/*` route needs `Authorization: Bearer <token>`, with
-  role/route policy enforced by `gateway/njs/policy.js`, not this API
-  itself. Needs `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET`
-  set in `.env` (see `.env.example`) — blank by default, so the rest of
-  the stack keeps working even before you configure these.
+  every other route on both APIs needs `Authorization: Bearer <token>`.
+  Needs `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET` set in
+  `.env` (see `.env.example`) — blank by default, so the rest of the
+  stack keeps working even before you configure these.
 
 ```bash
 curl -X POST localhost:8080/auth/orgs -H 'Content-Type: application/json' \
