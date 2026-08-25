@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Lets plain `node` treat these .js files as ES modules (matching njs, which always treats them as modules regardless of extension) so test_jwt.mjs/test_policy.mjs can import jwt.js/policy.js directly - not a real package, nothing here is published or installed."
+}

@@ -69,6 +69,7 @@ const config: ZudokuConfig = {
         { type: "link", label: "Fault API", to: "/api/fault" },
         { type: "link", label: "Derivation API", to: "/api/derivation" },
         { type: "link", label: "Validate API", to: "/api/validate" },
+        { type: "link", label: "Auth API", to: "/api/auth" },
         { type: "link", label: "FBF API (BACnet/Modbus)", to: "/api/fbf" },
       ],
     },
@@ -102,6 +103,12 @@ const config: ZudokuConfig = {
       input: "../validate-api-openapi.yaml",
       path: "/api/validate",
       categories: [{ label: "Timberdoodle APIs", tags: ["Validate API"] }],
+    },
+    {
+      type: "file",
+      input: "../auth-api-openapi.yaml",
+      path: "/api/auth",
+      categories: [{ label: "Timberdoodle APIs", tags: ["Auth API"] }],
     },
     {
       // FBF is a separate, independently-versioned sibling project

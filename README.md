@@ -26,8 +26,8 @@ specifically comes from `POSTGRES_PASSWORD` in `.env` (defaults to
 `timberdoodle` if unset — fine for local dev, change it for anything else).
 
 That's everything — 5 infra containers (mosquitto, oxigraph, postgres,
-jaeger, grafana), all 6 processes below, and an nginx gateway in front of
-the 3 HTTP APIs, all with one shared lifecycle now. Each process is still
+jaeger, grafana), all 7 processes below, and an nginx gateway in front of
+the 5 HTTP APIs, all with one shared lifecycle now. Each process is still
 its own container/image build target if you need to restart or update one
 independently (`docker compose up -d --build ingest_api`), but nothing
 requires manual per-process startup anymore.
@@ -41,19 +41,45 @@ requires manual per-process startup anymore.
 | `derivation_api` | CRUD for derivations (computed/synthetic histories) + per-target health, `POST /derivations/test`, `POST /derivations/dry-run`. | 8003 |
 | `derivation_engine` | Evaluates derivations on a sweep and, for cur-mode ones, on matching MQTT messages; writes results back into Oxigraph + Postgres. | — |
 | `validate_api` | `POST /validate` — checks the live entity graph against Brick's own SHACL shapes (`pip install -e ".[validate]"`). | 8005 |
+| `auth_api` | Identity: `POST /login`, API-key issuance/revocation, org/site directory CRUD. See "Gateway auth" below. | 8006 |
 
-The 4 HTTP APIs aren't exposed on the host directly anymore — go through
+None of the 5 HTTP APIs are exposed on the host directly — go through
 the gateway at `localhost:8080` instead, prefixed by API name
-(`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`). It requires HTTP basic auth:
-`GET` requests need a `gateway/read.htpasswd` credential, anything else
-(`POST`/`DELETE`) needs a `gateway/write.htpasswd` credential (a write
-credential doesn't also satisfy read unless you add it to both files).
-Both files are gitignored — generate your own with `htpasswd -bc` as shown
-above. The demo browser UI (`ui/`) is served straight off the gateway at
+(`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`, `/auth/*`). The
+demo browser UI (`ui/`) is served straight off the gateway at
 [`localhost:8080/ui/`](http://localhost:8080/ui/) — no separate
-`ui_server.py` needed for this path, and its `/ingest/history` calls go
-through the same gateway (same origin), so the browser's native basic-auth
-prompt covers it too.
+`ui_server.py` needed for this path.
+
+### Gateway auth (two systems, mid-migration)
+
+The gateway is moving from HTTP Basic (htpasswd) to JWT tokens verified
+in nginx itself via njs — incrementally, one location at a time, not a
+flag-day cutover. Today:
+
+- **`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`** still use
+  HTTP Basic: `GET` needs a `gateway/read.htpasswd` credential, anything
+  else (`POST`/`DELETE`) needs `gateway/write.htpasswd` (a write
+  credential doesn't also satisfy read unless added to both files). Both
+  files are gitignored — generate your own with `htpasswd -bc` as shown
+  above.
+- **`/auth/*`** (the new `auth_api`) uses the new model instead: `POST
+  /auth/orgs` creates a new org plus its first admin user (public, no
+  credential needed — there's no other admin who could authorize a
+  brand-new org); `POST /auth/login` exchanges email/password for a JWT;
+  every other `/auth/*` route needs `Authorization: Bearer <token>`, with
+  role/route policy enforced by `gateway/njs/policy.js`, not this API
+  itself. Needs `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET`
+  set in `.env` (see `.env.example`) — blank by default, so the rest of
+  the stack keeps working even before you configure these.
+
+```bash
+curl -X POST localhost:8080/auth/orgs -H 'Content-Type: application/json' \
+  -d '{"name": "Acme", "admin_email": "admin@acme.example", "admin_password": "change-me"}'
+curl -X POST localhost:8080/auth/login -H 'Content-Type: application/json' \
+  -d '{"email": "admin@acme.example", "password": "change-me"}'
+# -> {"token": "...", "user": {...}} - use the token as a Bearer credential from here on
+curl localhost:8080/auth/me -H "Authorization: Bearer <token>"
+```
 
 ```bash
 curl -u <read-user>:<read-password> localhost:8080/ingest/openapi.yaml
@@ -68,7 +94,7 @@ malformed or missing the required `point` field.
 
 Each API still serves its own OpenAPI spec at `GET /openapi.yaml` and a
 Swagger UI at `GET /docs` (through the gateway). For the full
-cross-referenced documentation site (all 4 API catalog entries plus
+cross-referenced documentation site (all 5 API catalog entries plus
 architecture and feature docs), see [`docs-site/`](docs-site) —
 `cd docs-site && npm install && npm run dev`.
 

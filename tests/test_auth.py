@@ -1,0 +1,194 @@
+"""
+Live against the real running Postgres, same shape as test_faults.py.
+Each test creates its own org/user/key with random ids (json_store.new_id()),
+so there's no cross-test collision to guard against with prefix cleanup -
+unlike faults.py's meaningful test-chosen rule_id/webhook_id strings.
+"""
+
+import time
+
+import pytest
+
+from timberdoodle.auth import (
+    create_api_key,
+    create_org,
+    create_site,
+    create_user,
+    decode_own_token,
+    ensure_schema,
+    get_user_by_email,
+    hash_password,
+    issue_api_key_token,
+    issue_session_token,
+    list_api_keys,
+    list_revoked_jtis,
+    revoke_api_key,
+    user_site_ids,
+    verify_password,
+)
+from timberdoodle.timeseries import connect
+
+
+@pytest.fixture
+def conn():
+    c = connect()
+    ensure_schema(c)
+    # Every test in this file uses an org name starting with "Test Org" -
+    # clean up in FK-safe order (children before parents) so re-running
+    # the suite doesn't collide with the unique email/jti constraints
+    # left over from a previous run.
+    c.execute("""
+        DELETE FROM user_sites WHERE user_id IN (
+            SELECT id FROM users WHERE org_id IN (SELECT id FROM orgs WHERE name LIKE 'Test Org%')
+        )
+    """)
+    c.execute("""
+        DELETE FROM revoked_tokens WHERE jti IN (
+            SELECT jti FROM api_keys WHERE org_id IN (SELECT id FROM orgs WHERE name LIKE 'Test Org%')
+        )
+    """)
+    c.execute("DELETE FROM api_keys WHERE org_id IN (SELECT id FROM orgs WHERE name LIKE 'Test Org%')")
+    c.execute("DELETE FROM sites WHERE org_id IN (SELECT id FROM orgs WHERE name LIKE 'Test Org%')")
+    c.execute("DELETE FROM users WHERE org_id IN (SELECT id FROM orgs WHERE name LIKE 'Test Org%')")
+    c.execute("DELETE FROM orgs WHERE name LIKE 'Test Org%'")
+    return c
+
+
+@pytest.fixture(autouse=True)
+def jwt_secret(monkeypatch):
+    # Real HMAC secrets have no sane default (unlike e.g. a localhost DB
+    # DSN) - every test needs one set explicitly.
+    monkeypatch.setenv("TIMBERDOODLE_JWT_SECRET", "test-secret-do-not-use-in-prod-need-32-bytes-min")
+
+
+def test_hash_password_roundtrip():
+    hashed = hash_password("correct horse battery staple")
+    assert verify_password("correct horse battery staple", hashed) is True
+    assert verify_password("wrong password", hashed) is False
+
+
+def test_hash_password_uses_a_fresh_salt_each_time():
+    a = hash_password("same password")
+    b = hash_password("same password")
+    assert a != b  # different random salts -> different stored hashes
+    assert verify_password("same password", a) is True
+    assert verify_password("same password", b) is True
+
+
+def test_verify_password_rejects_malformed_stored_hash():
+    assert verify_password("anything", "not-a-valid-hash-format") is False
+
+
+@pytest.mark.integration
+def test_create_org_creates_org_and_first_admin_user(conn):
+    org = create_org(conn, "Test Org", "admin@test-auth.invalid", "admin-password-123")
+    assert org["name"] == "Test Org"
+
+    user = get_user_by_email(conn, "admin@test-auth.invalid")
+    assert user is not None
+    assert user["org_id"] == org["id"]
+    assert user["role"] == "admin"
+    assert verify_password("admin-password-123", user["password_hash"]) is True
+
+
+@pytest.mark.integration
+def test_create_user_adds_a_user_to_an_existing_org(conn):
+    org = create_org(conn, "Test Org 2", "admin2@test-auth.invalid", "pw")
+    viewer = create_user(conn, org["id"], "viewer@test-auth.invalid", "viewer-pw", "viewer")
+    assert viewer["org_id"] == org["id"]
+    assert viewer["role"] == "viewer"
+
+    fetched = get_user_by_email(conn, "viewer@test-auth.invalid")
+    assert fetched["id"] == viewer["id"]
+
+
+@pytest.mark.integration
+def test_user_site_ids_empty_by_default(conn):
+    org = create_org(conn, "Test Org 3", "admin3@test-auth.invalid", "pw")
+    user = get_user_by_email(conn, "admin3@test-auth.invalid")
+    assert user_site_ids(conn, user["id"]) == []
+
+
+@pytest.mark.integration
+def test_create_site_under_an_org(conn):
+    org = create_org(conn, "Test Org 4", "admin4@test-auth.invalid", "pw")
+    site = create_site(conn, org["id"], "Building A")
+    assert site["org_id"] == org["id"]
+    assert site["name"] == "Building A"
+
+
+@pytest.mark.integration
+def test_issue_session_token_roundtrips_through_decode_own_token(conn):
+    org = create_org(conn, "Test Org 5", "admin5@test-auth.invalid", "pw")
+    user = get_user_by_email(conn, "admin5@test-auth.invalid")
+
+    token = issue_session_token(user, site_ids=["site-1"])
+    claims = decode_own_token(f"Bearer {token}")
+
+    assert claims["sub"] == user["id"]
+    assert claims["org_id"] == org["id"]
+    assert claims["role"] == "admin"
+    assert claims["site_ids"] == ["site-1"]
+    assert claims["kind"] == "session"
+    assert "exp" in claims  # session tokens are short-TTL, unlike api_key tokens
+
+
+def test_decode_own_token_rejects_missing_or_malformed_header():
+    assert decode_own_token(None) is None
+    assert decode_own_token("not-a-bearer-header") is None
+    assert decode_own_token("Bearer not.a.validjwt") is None
+
+
+@pytest.mark.integration
+def test_create_api_key_and_issue_token_roundtrip(conn):
+    org = create_org(conn, "Test Org 6", "admin6@test-auth.invalid", "pw")
+    key = create_api_key(conn, org["id"], "service", site_ids=["site-a", "site-b"])
+    assert key["role"] == "service"
+    assert key["expires_at"] is None  # no expires_in_seconds passed -> no expiry
+
+    token = issue_api_key_token(key)
+    claims = decode_own_token(f"Bearer {token}")
+    assert claims["sub"] == key["id"]
+    assert claims["kind"] == "api_key"
+    assert claims["jti"] == key["jti"]
+    assert "exp" not in claims  # no expiry requested
+
+
+@pytest.mark.integration
+def test_create_api_key_with_expiry_sets_exp_claim(conn):
+    org = create_org(conn, "Test Org 7", "admin7@test-auth.invalid", "pw")
+    key = create_api_key(conn, org["id"], "service", expires_in_seconds=3600)
+    assert key["expires_at"] is not None
+
+    token = issue_api_key_token(key)
+    claims = decode_own_token(f"Bearer {token}")
+    assert claims["exp"] > time.time()
+
+
+@pytest.mark.integration
+def test_list_api_keys_scoped_to_org(conn):
+    org_a = create_org(conn, "Test Org 8a", "admin8a@test-auth.invalid", "pw")
+    org_b = create_org(conn, "Test Org 8b", "admin8b@test-auth.invalid", "pw")
+    create_api_key(conn, org_a["id"], "service")
+    create_api_key(conn, org_b["id"], "service")
+
+    keys_a = list_api_keys(conn, org_a["id"])
+    assert len(keys_a) == 1
+    assert keys_a[0]["org_id"] == org_a["id"]
+
+
+@pytest.mark.integration
+def test_revoke_api_key_marks_revoked_and_denylists_jti(conn):
+    org = create_org(conn, "Test Org 9", "admin9@test-auth.invalid", "pw")
+    key = create_api_key(conn, org["id"], "service")
+
+    assert revoke_api_key(conn, key["id"]) is True
+    assert key["jti"] in list_revoked_jtis(conn)
+
+    keys = list_api_keys(conn, org["id"])
+    assert keys[0]["revoked_at"] is not None
+
+
+@pytest.mark.integration
+def test_revoke_api_key_returns_false_for_unknown_id(conn):
+    assert revoke_api_key(conn, "does-not-exist") is False

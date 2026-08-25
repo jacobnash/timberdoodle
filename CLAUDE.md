@@ -57,3 +57,33 @@ integrations). This file is gotchas only — don't duplicate those.
   (`ontology/`, `shacl_validate.py`, `validate_api.py` on port 8005) — the
   doc itself wasn't deleted (kept as design rationale), don't treat its
   "planned, not started" status line as current.
+- **Gateway auth is mid-migration, two systems at once — see
+  `~/.claude/plans/okay-i-want-to-tingly-hamster.md`'s Phase 2 for the
+  full design.** `/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`
+  still use the old htpasswd/`auth_basic` gate; only the new `/auth/*`
+  (`auth_api.py`) uses the new model — JWTs verified in nginx itself via
+  njs (`gateway/njs/`), not per-backend Python code. `auth_api.py`
+  refuses to start without `TIMBERDOODLE_JWT_SECRET` set; the gateway's
+  own JWT verification and the `X-Gateway-Secret` backend
+  defense-in-depth check (`gateway_auth.py`) both need
+  `TIMBERDOODLE_JWT_SECRET`/`TIMBERDOODLE_GATEWAY_SECRET` too — both
+  blank by default (`.env.example`) so the rest of the stack keeps
+  working before you configure them, but `/auth/*` itself won't function
+  at all until you do.
+- **`gateway/njs/*.js` are ES modules regardless of file extension** —
+  njs always treats them as modules. Plain `node` needs
+  `gateway/njs/package.json`'s `"type": "module"` to agree, or
+  `test_jwt.mjs`/`test_policy.mjs` (`node gateway/njs/test_*.mjs`, no
+  pytest equivalent exists for this code) fail to import them. Only
+  `export default { ... }` works in njs 1.0.0 (bundled with
+  `nginx:alpine`) — named exports (`export const X = ...`), array/object
+  destructuring, `for...of`, spread, default params, and `class` all
+  throw `SyntaxError`/`TypeError` at nginx config load time, not at
+  runtime — `nginx -t` catches these, plain review doesn't. Also: a
+  `js_shared_dict_zone` needs an explicit `timeout=` for `.incr()`'s own
+  TTL argument to work at all, `ngx.fetch()` needs a `resolver` directive
+  (Docker Compose: `127.0.0.11`) to resolve container hostnames — neither
+  error surfaces at `nginx -t`, only at request/periodic-tick time, and
+  only visibly if `error_log` is at `warn` or lower (the nginx default,
+  `error`, silently swallows both `ngx.log(ngx.WARN, ...)` output and the
+  underlying failures unless you turn it up).

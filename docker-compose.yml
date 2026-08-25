@@ -4,6 +4,16 @@ x-daemon-env: &daemon-env
   MQTT_HOST: mosquitto
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
   TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS: ${TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS:-}
+  # Blank-safe like the var above, not required (:?) - only auth_api.py
+  # and the gateway need this so far (incremental gateway-auth rollout,
+  # see the plan doc's Phase 2 migration path); other daemons never
+  # check it. Set it in .env once you're actually using auth_api/the new
+  # gateway auth - until then the stack runs exactly as before.
+  TIMBERDOODLE_GATEWAY_SECRET: ${TIMBERDOODLE_GATEWAY_SECRET:-}
+  # Only auth_api.py (issues tokens) actually needs this - blanket-added
+  # to the anchor like the var above, harmless for daemons that never
+  # read it.
+  TIMBERDOODLE_JWT_SECRET: ${TIMBERDOODLE_JWT_SECRET:-}
 
 x-daemon-depends-on: &daemon-depends-on
   postgres:
@@ -127,6 +137,14 @@ services:
       - .:/app
     depends_on: *daemon-depends-on
 
+  auth_api:
+    build: .
+    command: python -m timberdoodle.auth_api
+    environment: *daemon-env
+    volumes:
+      - .:/app
+    depends_on: *daemon-depends-on
+
   haystack_puller:
     build: .
     command: python -m timberdoodle.haystack_puller
@@ -149,8 +167,15 @@ services:
     image: nginx:alpine
     ports:
       - "8080:80"
+    environment:
+      # Blank-safe (see .env.example) - inert until auth_api exists and
+      # a location is actually cut over to js_access (Phase 2 migration
+      # path, steps 2-4).
+      TIMBERDOODLE_JWT_SECRET: ${TIMBERDOODLE_JWT_SECRET:-}
+      TIMBERDOODLE_GATEWAY_SECRET: ${TIMBERDOODLE_GATEWAY_SECRET:-}
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/njs:/etc/nginx/njs:ro
       - ./gateway/read.htpasswd:/etc/nginx/read.htpasswd:ro
       - ./gateway/write.htpasswd:/etc/nginx/write.htpasswd:ro
       - ./ui:/usr/share/nginx/ui:ro
@@ -159,6 +184,7 @@ services:
       - fault_api
       - derivation_api
       - validate_api
+      - auth_api
 
 volumes:
   oxigraph-data:

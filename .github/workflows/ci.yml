@@ -15,7 +15,11 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[dev,validate]"
       - run: pytest -m "not integration"
-      - run: openapi-spec-validator openapi.yaml fault-api-openapi.yaml derivation-api-openapi.yaml validate-api-openapi.yaml
+      - run: openapi-spec-validator openapi.yaml fault-api-openapi.yaml derivation-api-openapi.yaml validate-api-openapi.yaml auth-api-openapi.yaml
+      # gateway/njs/ has no pytest equivalent - plain node runs the same
+      # WebCrypto-based logic njs runs inside nginx (GitHub Actions
+      # runners have Node preinstalled, no setup-node action needed).
+      - run: node gateway/njs/test_jwt.mjs && node gateway/njs/test_policy.mjs
 
   integration:
     runs-on: ubuntu-latest
@@ -34,6 +38,14 @@ jobs:
           htpasswd -bc gateway/read.htpasswd ci-reader ci-reader-pw
           htpasswd -bc gateway/write.htpasswd ci-writer ci-writer-pw
       - run: docker compose up -d --build
+        env:
+          # Throwaway CI-only secrets so auth_api.py/gateway can start at
+          # all (auth_api.py refuses to start without
+          # TIMBERDOODLE_JWT_SECRET) and tests/test_gateway_auth.py has a
+          # real, working gateway to test against - never real secrets,
+          # never committed.
+          TIMBERDOODLE_JWT_SECRET: ci-only-jwt-secret-needs-32-bytes-minimum
+          TIMBERDOODLE_GATEWAY_SECRET: ci-only-gateway-secret-value
       - name: Wait for postgres to be healthy
         run: |
           for i in $(seq 1 60); do

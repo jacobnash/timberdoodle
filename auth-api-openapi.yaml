@@ -1,0 +1,306 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Auth API
+  version: "1.0.0"
+  description: |
+    Identity: login, API-key issuance/revocation, org/site directory CRUD.
+    Separate process/port from ingest/fault/derivation/validate - this
+    document is served by the process it actually describes.
+
+    Role/site/rate-limit enforcement for every route below (except
+    `POST /auth/login`, which can't require a token to get a token)
+    happens in the gateway itself (nginx + njs), not in this service -
+    see `gateway/njs/policy.js` for the actual per-route role
+    requirements. This spec documents the request/response shapes, not
+    the authorization policy.
+servers:
+  - url: http://localhost:8080/auth
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path.
+  - url: http://localhost:8006
+    description: >-
+      Direct - only reachable if you're running this process bare-metal
+      or from inside the Docker network. docker-compose.yml does not
+      publish this port to the host in the normal containerized setup.
+tags:
+  - name: Auth
+    description: Login, logout, "who am I".
+  - name: API keys
+    description: Long-lived service-account credentials.
+  - name: Directory
+    description: Org/site CRUD.
+paths:
+  /login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Exchange email/password for a session JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: A session JWT, 12h TTL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, user]
+                properties:
+                  token: { type: string }
+                  user:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      org_id: { type: string }
+                      role: { type: string, enum: [admin, operator, viewer] }
+                      site_ids: { type: array, items: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: Revoke the caller's own token, if revocable
+      description: >-
+        Only meaningful for `kind: "api_key"` tokens (added to the
+        revocation denylist). Session tokens are short-lived enough that
+        this is a no-op for them - always returns 204 either way.
+      responses:
+        "204":
+          description: Always, whether or not there was anything to revoke.
+  /me:
+    get:
+      operationId: getMe
+      tags: [Auth]
+      summary: Decode and return the caller's own token claims
+      responses:
+        "200":
+          description: The caller's identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Principal"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api-keys:
+    post:
+      operationId: createApiKey
+      tags: [API keys]
+      summary: Issue a long-lived service-account token
+      description: The raw token is only ever returned here, at creation time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [admin, operator, viewer, service] }
+                site_ids:
+                  type: ["array", "null"]
+                  items: { type: string }
+                  description: Omit or null for whole-org access.
+                expires_in_seconds:
+                  type: ["integer", "null"]
+                  description: Omit or null for no expiry.
+      responses:
+        "201":
+          description: Created. `token` is shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  role: { type: string }
+                  site_ids: { type: array, items: { type: string } }
+                  token: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      operationId: listApiKeys
+      tags: [API keys]
+      summary: List API keys for the caller's org
+      description: Raw tokens are never returned again after creation.
+      responses:
+        "200":
+          description: Every API key in the caller's org.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api-keys/{id}:
+    delete:
+      operationId: revokeApiKey
+      tags: [API keys]
+      summary: Revoke an API key
+      description: >-
+        Marks the key revoked and adds its `jti` to the denylist the
+        gateway's periodic poller consumes - takes effect gateway-side
+        within one poll interval (default 30s), not instantly.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Revoked. No response body.
+        "404":
+          description: No API key with that id.
+  /orgs:
+    post:
+      operationId: createOrg
+      tags: [Directory]
+      summary: Create a new org, plus its first admin user, in one call
+      description: >-
+        **Public - no token required.** A brand-new org has to be
+        creatable with zero prior credentials; there's no other admin
+        who could have authorized it. Rate-limited per source IP at the
+        gateway (5/min) since it's the one mutating route this API
+        exposes without a token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, admin_email, admin_password]
+              properties:
+                name: { type: string }
+                admin_email: { type: string, format: email }
+                admin_password: { type: string }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  admin_user_id: { type: string }
+  /sites:
+    post:
+      operationId: createSite
+      tags: [Directory]
+      summary: Create a site under the caller's own org
+      description: admin-only. `org_id` is the caller's own org, taken from their token - not a request field.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  org_id: { type: string }
+                  name: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /users:
+    post:
+      operationId: createUser
+      tags: [Directory]
+      summary: Add a user to the caller's own org
+      description: >-
+        admin-only. `org_id` is the caller's own org, taken from their
+        token. For a brand-new org's *first* user, use `POST /orgs`
+        instead - this endpoint needs an existing admin to call it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, role]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                role: { type: string, enum: [admin, operator, viewer] }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  org_id: { type: string }
+                  email: { type: string }
+                  role: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: This document
+      description: Served raw, straight off disk - the same file you're reading right now.
+      responses:
+        "200":
+          description: The OpenAPI 3.1 spec for this API, as YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    Principal:
+      type: object
+      required: [sub, org_id, role]
+      properties:
+        sub: { type: string }
+        org_id: { type: string }
+        role: { type: string, enum: [admin, operator, viewer, service] }
+        site_ids: { type: array, items: { type: string } }
+        kind: { type: string, enum: [session, api_key] }
+    ApiKey:
+      type: object
+      required: [id, org_id, role]
+      properties:
+        id: { type: string }
+        org_id: { type: string }
+        site_ids: { type: array, items: { type: string } }
+        role: { type: string }
+        expires_at: { type: ["string", "null"], format: date-time }
+        revoked_at: { type: ["string", "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: ["string", "null"], format: date-time }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or expired token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
