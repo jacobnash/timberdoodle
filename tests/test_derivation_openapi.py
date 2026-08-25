@@ -24,6 +24,7 @@ from timberdoodle.remote_store import RemoteStore
 from timberdoodle.timeseries import connect_pool, read_latest, write_point_value
 
 AVG_FN_SOURCE = "def run(inputs, row):\n    vals = [v for s in inputs.values() for _, v in s[-1:]]\n    return sum(vals) / len(vals) if vals else None"
+GATEWAY_SECRET = "test-gateway-secret"
 
 
 @pytest.fixture(scope="module")
@@ -58,7 +59,8 @@ def ts_pool():
 
 
 @pytest.fixture
-def live_server(tmp_path, store, ts_pool):
+def live_server(tmp_path, store, ts_pool, monkeypatch):
+    monkeypatch.setenv("TIMBERDOODLE_GATEWAY_SECRET", GATEWAY_SECRET)
     with ts_pool.connection() as conn:
         derivation_health.ensure_schema(conn)
     derivations_path = str(tmp_path / "derivations.json")
@@ -68,6 +70,16 @@ def live_server(tmp_path, store, ts_pool):
     thread.start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
+
+
+@pytest.fixture
+def gw(live_server):
+    """A requests.Session with the gateway-secret header pre-attached -
+    every route except GET /openapi.yaml and GET /docs needs it (see
+    gateway_auth.request_came_through_gateway)."""
+    s = requests.Session()
+    s.headers["X-Gateway-Secret"] = GATEWAY_SECRET
+    return s
 
 
 @pytest.mark.integration
@@ -80,8 +92,14 @@ def test_get_openapi_yaml_serves_the_real_spec_file(live_server):
 
 
 @pytest.mark.integration
-def test_create_derivation_without_test_cases_is_rejected(live_server):
-    resp = requests.post(f"{live_server}/derivations", json={
+def test_post_without_gateway_secret_is_401(live_server):
+    resp = requests.post(f"{live_server}/derivations", json={"name": "x", "fn_source": "def run(inputs, row): return 1.0", "test_cases": []})
+    assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_create_derivation_without_test_cases_is_rejected(gw, live_server):
+    resp = gw.post(f"{live_server}/derivations", json={
         "name": "test-openapi-de-no-cases",
         "fn_source": "def run(inputs, row):\n    return 1.0",
         "test_cases": [],
@@ -90,8 +108,8 @@ def test_create_derivation_without_test_cases_is_rejected(live_server):
 
 
 @pytest.mark.integration
-def test_create_derivation_with_failing_test_case_is_rejected(live_server):
-    resp = requests.post(f"{live_server}/derivations", json={
+def test_create_derivation_with_failing_test_case_is_rejected(gw, live_server):
+    resp = gw.post(f"{live_server}/derivations", json={
         "name": "test-openapi-de-bad-case",
         "fn_source": "def run(inputs, row):\n    return 1.0",
         "test_cases": [{"inputs": {}, "row": {}, "expected": 2.0}],
@@ -100,7 +118,7 @@ def test_create_derivation_with_failing_test_case_is_rejected(live_server):
 
 
 @pytest.mark.integration
-def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(live_server, spec, store, ts_pool):
+def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(gw, live_server, spec, store, ts_pool):
     equip = topic_prefix_to_equip_uri("test-openapi-de/formula")
     p1 = topic_to_point_uri("test-openapi-de/formula/a")
     p2 = topic_to_point_uri("test-openapi-de/formula/b")
@@ -127,20 +145,20 @@ def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(
         "depends_on": [],
     }
 
-    create_resp = requests.post(f"{live_server}/derivations", json=body)
+    create_resp = gw.post(f"{live_server}/derivations", json=body)
     assert create_resp.status_code == 201
     derivation = create_resp.json()
     _assert_matches_schema(derivation, spec["paths"]["/derivations"]["post"]["responses"]["201"]["content"]["application/json"]["schema"], spec)
 
-    list_resp = requests.get(f"{live_server}/derivations")
+    list_resp = gw.get(f"{live_server}/derivations")
     assert list_resp.status_code == 200
     assert any(d["id"] == derivation["id"] for d in list_resp.json())
 
-    test_resp = requests.post(f"{live_server}/derivations/test", json={"fn_source": body["fn_source"], "test_cases": body["test_cases"]})
+    test_resp = gw.post(f"{live_server}/derivations/test", json={"fn_source": body["fn_source"], "test_cases": body["test_cases"]})
     assert test_resp.status_code == 200
     assert all(r["passed"] for r in test_resp.json())
 
-    dryrun_resp = requests.post(f"{live_server}/derivations/dry-run", json={"id": derivation["id"]})
+    dryrun_resp = gw.post(f"{live_server}/derivations/dry-run", json={"id": derivation["id"]})
     assert dryrun_resp.status_code == 200
     trace = dryrun_resp.json()
     assert trace[0]["computed_value"] == 15.0
@@ -148,29 +166,29 @@ def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(
     with ts_pool.connection() as conn:
         assert read_latest(conn, output_uri) is None  # dry-run never writes
 
-    targets_resp = requests.get(f"{live_server}/derivations/{derivation['id']}/targets")
+    targets_resp = gw.get(f"{live_server}/derivations/{derivation['id']}/targets")
     assert targets_resp.status_code == 200
     assert targets_resp.json() == []  # dry-run doesn't touch target health either
 
-    enable_resp = requests.post(f"{live_server}/derivations/{derivation['id']}/targets/{quote(str(equip), safe='')}/enable")
+    enable_resp = gw.post(f"{live_server}/derivations/{derivation['id']}/targets/{quote(str(equip), safe='')}/enable")
     assert enable_resp.status_code == 200
     assert enable_resp.json()["disabled"] is False
 
-    delete_resp = requests.delete(f"{live_server}/derivations/{derivation['id']}")
+    delete_resp = gw.delete(f"{live_server}/derivations/{derivation['id']}")
     assert delete_resp.status_code == 204
-    delete_again = requests.delete(f"{live_server}/derivations/{derivation['id']}")
+    delete_again = gw.delete(f"{live_server}/derivations/{derivation['id']}")
     assert delete_again.status_code == 404
 
 
 @pytest.mark.integration
-def test_dry_run_with_unknown_id_returns_400(live_server):
-    resp = requests.post(f"{live_server}/derivations/dry-run", json={"id": "no-such-derivation"})
+def test_dry_run_with_unknown_id_returns_400(gw, live_server):
+    resp = gw.post(f"{live_server}/derivations/dry-run", json={"id": "no-such-derivation"})
     assert resp.status_code == 400
 
 
 @pytest.mark.integration
-def test_dry_run_with_uncompilable_draft_returns_400(live_server):
-    resp = requests.post(f"{live_server}/derivations/dry-run", json={
+def test_dry_run_with_uncompilable_draft_returns_400(gw, live_server):
+    resp = gw.post(f"{live_server}/derivations/dry-run", json={
         "name": "draft", "fn_source": "def run(inputs, row:\n    return 1", "test_cases": [],
     })
     assert resp.status_code == 400

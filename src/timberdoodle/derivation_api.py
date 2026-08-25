@@ -20,7 +20,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
-from timberdoodle import derivation_engine, derivation_health, docs_ui, json_store, sandbox, tracing
+from timberdoodle import derivation_engine, derivation_health, docs_ui, gateway_auth, json_store, sandbox, tracing
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.timeseries import connect_pool
 
@@ -67,7 +67,16 @@ def make_handler(derivations_path: str, store, ts_pool):
             length = int(self.headers.get("Content-Length", 0))
             return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
 
+        def _require_gateway(self) -> bool:
+            if gateway_auth.request_came_through_gateway(self):
+                return True
+            self.send_response(401)
+            self.end_headers()
+            return False
+
         def do_POST(self):
+            if not self._require_gateway():
+                return
             if self.path == "/derivations":
                 self._handle("api.post_derivations", self._create_derivation)
                 return
@@ -86,6 +95,14 @@ def make_handler(derivations_path: str, store, ts_pool):
             self.end_headers()
 
         def do_GET(self):
+            if self.path == "/openapi.yaml":
+                self._serve_openapi_spec()
+                return
+            if self.path == "/docs":
+                docs_ui.serve(self)
+                return
+            if not self._require_gateway():
+                return
             if self.path == "/derivations":
                 self._handle("api.get_derivations", lambda span: _respond_json(self, 200, json_store.load(derivations_path)))
                 return
@@ -93,16 +110,12 @@ def make_handler(derivations_path: str, store, ts_pool):
             if match:
                 self._handle("api.get_targets", lambda span: self._list_targets(match.group(1), span))
                 return
-            if self.path == "/openapi.yaml":
-                self._serve_openapi_spec()
-                return
-            if self.path == "/docs":
-                docs_ui.serve(self)
-                return
             self.send_response(404)
             self.end_headers()
 
         def do_DELETE(self):
+            if not self._require_gateway():
+                return
             if self.path.startswith("/derivations/"):
                 derivation_id = self.path[len("/derivations/"):]
                 self._handle("api.delete_derivation", lambda span: self._delete(derivation_id, span))

@@ -56,12 +56,12 @@ The gateway is moving from HTTP Basic (htpasswd) to JWT tokens verified
 in nginx itself via njs — incrementally, one location at a time, not a
 flag-day cutover. Today:
 
-- **`/ingest/*`, `/fault/*`, `/derivation/*`** still use HTTP Basic: `GET`
-  needs a `gateway/read.htpasswd` credential, anything else
-  (`POST`/`DELETE`) needs `gateway/write.htpasswd` (a write credential
-  doesn't also satisfy read unless added to both files). Both files are
-  gitignored — generate your own with `htpasswd -bc` as shown above.
-- **`/validate/*` and `/auth/*`** use the new model instead: a real JWT,
+- **`/ingest/*`, `/fault/*`** still use HTTP Basic: `GET` needs a
+  `gateway/read.htpasswd` credential, anything else (`POST`/`DELETE`)
+  needs `gateway/write.htpasswd` (a write credential doesn't also
+  satisfy read unless added to both files). Both files are gitignored —
+  generate your own with `htpasswd -bc` as shown above.
+- **`/validate/*`, `/derivation/*`, and `/auth/*`** use the new model instead: a real JWT,
   verified in nginx itself (`gateway/njs/`), with role/route policy
   enforced by `gateway/njs/policy.js` — not per-API Python code. `POST
   /auth/orgs` creates a new org plus its first admin user (public, no
