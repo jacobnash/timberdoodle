@@ -55,6 +55,30 @@ argparse error. See the repo's `.env.example` or the table below.
 - Each remote ref is namespaced as `<source_id>:<ref>` so multiple sources
   can't collide.
 
+## No real Haxall/SkySpark instance handy?
+
+`scripts/mock_haystack_server.py` runs a small fake Haystack server
+in-process (real SCRAM-SHA-256 handshake, canned equip/point/history
+grids seeded with an AHU, a VAV, and a couple of already-tagged points —
+one deliberately untaggable, so you see a `miss` in the classification
+summary too) — enough to try the puller end-to-end without any external
+system:
+
+```bash
+python -m scripts.mock_haystack_server
+# prints: mock Haystack server on http://127.0.0.1:<port>
+#         --haystack-user tduser --haystack-password tdpass
+```
+
+Then, against the printed port:
+
+```bash
+python -m timberdoodle.haystack_puller \
+  --haystack-url http://127.0.0.1:<port> \
+  --haystack-user tduser --haystack-password tdpass \
+  --once
+```
+
 ## Configuration
 
 | Env var | CLI flag | Default | Required |
@@ -67,6 +91,7 @@ argparse error. See the repo's `.env.example` or the table below.
 | — | `--equip-filter` | `equip` | no |
 | — | `--tick-seconds` | `300.0` | no |
 | — | `--backfill-days` | `7.0` | no |
+| — | `--once` | off | no |
 
 `--point-filter`/`--equip-filter` are Haystack filter expressions passed
 straight to the remote server's `read` op. `--backfill-days` is how far
@@ -81,6 +106,35 @@ python -m timberdoodle.haystack_puller \
   --haystack-url https://your-haxall-host \
   --haystack-user readonly
 ```
+
+## One-time migration
+
+The same pipeline doubles as a Haystack/Xeto-to-Brick migration tool, not
+just a live shadow of an existing deployment. `--once` runs a single
+pull-everything pass — every currently-tagged equip and point on the
+source — and exits instead of polling forever:
+
+```bash
+python -m timberdoodle.haystack_puller \
+  --haystack-url https://your-haxall-host \
+  --haystack-user readonly \
+  --once
+```
+
+It prints a classification summary (`direct`/`fallback`/`miss`/`llm` counts
+for equip and points separately). Follow up with
+`python -m timberdoodle.autotag` to LLM-sweep anything the rule engine
+alone couldn't place, proposing new `rules/haystack_to_brick.yaml` entries
+for a human to review — see [Adding a Data Source](/adding-a-data-source)
+and the README's autotag section.
+
+This works unmodified against a Xeto-enabled Haxall/SkySpark server, too.
+Xeto adds a new, opt-in "version 5" wire protocol (Jeto encoding), but a
+server only serves it to a client that explicitly requests it via an
+`Xeto-Version: 5` header — `haystack_client.py` never sends one, so it gets
+the same classic `read`/`hisRead` JSON either way. There's no separate
+"Xeto migration" path because there's nothing Xeto-specific to bridge at
+the wire level.
 
 ## Known v1 limitations
 

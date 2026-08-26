@@ -20,8 +20,12 @@ it's ~1.5MB of Turtle).
 ## Running it
 
 ```bash
-curl -u <write-user>:<write-password> -X POST localhost:8080/validate/validate
+curl -X POST localhost:8080/validate/validate \
+  -H "Authorization: Bearer $TOKEN"
 ```
+
+(`$TOKEN` from `POST /auth/login`, per [gateway auth](/gateway-auth) —
+every gateway route is JWT-Bearer-only, there's no HTTP Basic Auth here.)
 
 Always validates the **current live** Oxigraph state — no request body.
 Returns `200` either way; conformance is data in the response, not an

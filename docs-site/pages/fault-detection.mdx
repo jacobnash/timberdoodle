@@ -10,6 +10,30 @@ one message out to every subscriber for free, so a second subscription
 gets a live copy of every reading with zero coupling to the ingest hot
 path.
 
+## Registering a rule
+
+```bash
+curl -X POST localhost:8080/fault/rules \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name": "zone-temp-out-of-range", "mode": "cur", "type": "range", "applies_to": {"topic_glob": "fbf/mock-ahu-1/*"}, "min": 60.0, "max": 80.0}'
+```
+
+`applies_to` takes exactly one of `topic_glob` or `brick_class`. See
+[`POST /fault/rules`](/api/fault) for the full field reference and more
+`stuck`/`stale` examples.
+
+**Cur mode only sees MQTT traffic.** `fault_detector.py` subscribes to
+`fbf/#` directly and never touches `ingest_api.py` — so a reading pushed
+via `POST /ingest/ingest` (see [Architecture](/architecture)) is stored
+identically, but never evaluated by a Cur-mode rule, since it never
+crosses MQTT. To trigger one for testing, publish over MQTT yourself,
+same envelope `POST /ingest` uses:
+
+```bash
+mosquitto_pub -h localhost -t 'fbf/mock-ahu-1/analogValue,1' \
+  -m '{"point": "fbf/mock-ahu-1/analogValue,1", "value": 95.0}'
+```
+
 ## Cur vs. His — why there are two evaluation modes
 
 Some faults are only detectable in the moment; others fundamentally need
@@ -30,8 +54,14 @@ So rules declare a `mode`:
 One important asymmetry: a rule's `topic_glob` is matched against the
 **raw MQTT topic** in Cur mode, but against the **`urn:point:{topic}`
 URI** in His mode (since His-mode rules query `point_history`, which is
-keyed by URI, not topic). Same glob syntax, different string underneath —
-worth double-checking if a rule silently never fires.
+keyed by URI, not topic). This is `fault_detector.py` prepending
+`urn:point:` onto your `topic_glob` internally before matching — **write
+`topic_glob` as the raw topic either way** (e.g. `"fbf/ahu-1/*"`, same
+string a Cur-mode rule would use), never with `urn:point:` already on the
+front yourself. Adding the prefix yourself double-prefixes it and the rule
+silently matches nothing, ever — no error, just zero faults forever. Same
+glob syntax, different string matched against it under the hood — worth
+double-checking if a His-mode rule silently never fires.
 
 ## What each rule type actually checks — and where it doesn't fire
 

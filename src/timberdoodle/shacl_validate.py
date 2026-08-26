@@ -36,13 +36,13 @@ def graph_from_remote_store(store) -> Graph:
     """Bulk-fetches the live Oxigraph default graph as Turtle and parses
     it into an in-memory rdflib.Graph - pyshacl.validate() needs a graph
     it can walk locally, not a live SPARQL endpoint to query per-shape.
-    `?default` is required on the GET (unlike the bulk-load POST in
-    RemoteStore.load_ontology, which targets the default graph with no
-    query params): this deployment runs Oxigraph with
+    `?default` is required on the GET: this deployment runs Oxigraph with
     --union-default-graph, which makes a bare GET /store try to serialize
     the whole multi-graph dataset (and fail, since Turtle can't represent
-    named graphs) instead of just the actual default graph this project
-    writes every triple to."""
+    named graphs) instead of just the actual default graph entity writes
+    land in. RemoteStore.load_ontology targets its own named graph, not
+    the default graph, so this fetch already excludes it - the data graph
+    validated here is entity data only, never the ontology itself."""
     resp = store._session.get(f"{store.base_url}/store", params={"default": ""}, headers={"Accept": "text/turtle"})
     resp.raise_for_status()
     graph = Graph()

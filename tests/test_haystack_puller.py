@@ -128,6 +128,31 @@ def test_history_rows_land_in_postgres(ts_conn):
     assert read_latest(ts_conn, str(point_uri)) == 71.5
 
 
+def test_pull_points_and_pull_equip_tally_classification_outcomes(ts_conn):
+    """--once's migration summary is only as good as these counts - a
+    direct-match point/equip and a no-overlap-at-all point/equip should
+    land in different buckets, not get silently merged."""
+    rules = load_rules()
+    rule = next(r for r in rules if r["brick_class"] == "Zone_Air_Temperature_Sensor")
+    equip_rules = load_rules("rules/haystack_equip_to_brick.yaml")
+    equip_rule = equip_rules[0]
+
+    store = Store()
+    client = FakeHaystackClient(
+        points=[
+            {"id": "p1", **{t: True for t in rule["tags"]}},
+            {"id": "p2", "totallyUnknownTag": True},
+        ],
+        equip=[{"id": "e1", **{t: True for t in equip_rule["tags"]}}],
+    )
+
+    point_counts = pull_points(client, store, ts_conn, SOURCE_ID, "point", backfill_days=1.0)
+    equip_counts = pull_equip(client, store, SOURCE_ID, "equip")
+
+    assert point_counts == {"direct": 1, "miss": 1}
+    assert equip_counts == {"direct": 1}
+
+
 def test_equip_with_matching_tags_classifies_into_a_real_brick_equip_class():
     from timberdoodle.mapping import load_rules as load_mapping_rules
 

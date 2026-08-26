@@ -6,10 +6,12 @@ untouched for fast unit tests; this is what the live daemon points at.
 Verified against a real running Oxigraph instance: single-triple adds via
 SPARQL 1.1 Update (`/update`, INSERT DATA) land in the true default graph;
 queries via `/query` with a JSON results Accept header. Ontology files are
-parsed locally with rdflib (already-proven parsing) and pushed as batched
-INSERT DATA statements, rather than relying on Oxigraph's bulk graph-store
-endpoint, whose default-graph-targeting semantics weren't worth the time to
-pin down for what's ultimately the same handful of one-time ontology loads.
+streamed straight to Oxigraph's bulk graph-store endpoint, into their own
+named graph via PUT (replace), instead of being parsed with rdflib and
+re-sent as INSERT DATA into the default graph - ontologies like Brick are
+full of blank nodes from OWL restrictions, which INSERT DATA rejects, and
+whose fresh identity on every parse would make a POST/merge reload
+duplicate forever instead of converging (see load_ontology below).
 """
 
 import os
@@ -66,17 +68,34 @@ class RemoteStore:
         )
         resp.raise_for_status()
 
+    ONTOLOGY_GRAPH = "urn:timberdoodle:ontology"
+
     def load_ontology(self, path: str, fmt: str = "turtle") -> None:
         """Stream the file straight to Oxigraph's bulk graph-store endpoint
-        (bare POST /store, no query params, targets the true default graph)
         rather than parsing with rdflib and re-serializing as batched INSERT
         DATA - ontologies like Brick are full of blank nodes (OWL
         restrictions), and SPARQL's INSERT DATA form rejects them; splitting
         across batches would also risk breaking blank node identity across
-        requests. Letting Oxigraph parse the file directly sidesteps both."""
+        requests. Letting Oxigraph parse the file directly sidesteps both.
+
+        Targets a dedicated named graph (not the true default graph the rest
+        of this class writes entities to) via PUT, not POST: PUT replaces a
+        graph's contents outright, POST merges into it. That distinction is
+        the whole point here - blank nodes get fresh identities on every
+        parse, so a POST/merge reload can never dedupe against a previous
+        load and just keeps appending the same ontology forever. PUT makes
+        repeat calls idempotent instead. Queries still see this graph merged
+        with entity data automatically (docker-compose runs Oxigraph with
+        --union-default-graph); graph_from_remote_store's default-graph-only
+        fetch stays correctly scoped to just entity data either way."""
         content_type = {"turtle": "text/turtle", "xml": "application/rdf+xml", "n3": "text/n3"}.get(fmt, "text/turtle")
         with open(path, "rb") as f:
-            resp = self._session.post(f"{self.base_url}/store", headers={"Content-Type": content_type}, data=f)
+            resp = self._session.put(
+                f"{self.base_url}/store",
+                params={"graph": self.ONTOLOGY_GRAPH},
+                headers={"Content-Type": content_type},
+                data=f,
+            )
         resp.raise_for_status()
 
     def add_entity(self, uri: URIRef, rdf_type: URIRef) -> None:

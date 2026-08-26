@@ -123,7 +123,7 @@ paths:
               $ref: "#/components/schemas/CreateWebhookRequest"
             examples:
               default:
-                value: { "url": "https://example.com/hooks/timberdoodle", "secret": "a-shared-secret", "filter": { "rule_id": "zone-temp-out-of-range" } }
+                value: { "url": "https://example.com/hooks/timberdoodle", "secret": "a-shared-secret", "filter": { "rule_id": "e38a2a2a84404bb4ae50f1fa88535eda" } }
       responses:
         "201":
           description: Created. The `secret` is returned here once - every later GET redacts it.
@@ -208,7 +208,7 @@ paths:
             type: string
         - name: rule_id
           in: query
-          description: Filter to faults raised by one rule.
+          description: Filter to faults raised by one rule - the rule's `id` (from `POST /fault/rules`'s response), not its `name`.
           schema:
             type: string
       responses:
@@ -285,6 +285,8 @@ components:
           properties:
             id:
               type: string
+              description: Server-generated (a hex string, distinct from `name`) - this is the value a webhook's `filter.rule_id` must match, not `name`.
+              example: "e38a2a2a84404bb4ae50f1fa88535eda"
         - $ref: "#/components/schemas/CreateRuleRequest"
     CreateWebhookRequest:
       type: object
@@ -302,6 +304,8 @@ components:
           properties:
             rule_id:
               type: string
+              description: The `id` field from `POST /fault/rules`'s response - NOT the `name` you chose when creating the rule. A `name`-shaped value here matches nothing and the webhook silently never fires (no error at registration time).
+              example: "e38a2a2a84404bb4ae50f1fa88535eda"
     Webhook:
       allOf:
         - type: object

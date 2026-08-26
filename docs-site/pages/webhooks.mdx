@@ -10,6 +10,24 @@ Cur-mode rules, the main thread for the His-mode sweep) — a slow or dead
 webhook URL must never stall fault evaluation for every other point
 behind it.
 
+```bash
+curl -X POST localhost:8080/fault/webhooks \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/hooks/timberdoodle", "secret": "a-shared-secret", "filter": {"rule_id": "e38a2a2a84404bb4ae50f1fa88535eda"}}'
+```
+
+`filter.rule_id` is the `id` `POST /fault/rules` returned when you created
+the rule — **not** the `name` you chose for it. This is easy to get wrong
+because the two examples on this site look like they'd pair up (a rule
+named `zone-temp-out-of-range`, a webhook filtered to
+`"rule_id": "zone-temp-out-of-range"`) — they don't. A `name`-shaped value
+here matches nothing: the webhook registers successfully (`201`, no
+error) and then silently never fires, with no signal anywhere in the API
+telling you why. Copy the actual `id` from the rule-creation response.
+
+`secret` is returned once, in this creation response only — every later
+`GET /webhooks` redacts it to `null`.
+
 ## Signing
 
 Every delivery carries an `X-Timberdoodle-Signature` header:
@@ -51,7 +69,8 @@ as 15) is what actually trips the threshold.
 
 ## Filtering
 
-`filter: { "rule_id": "..." }` scopes a webhook to one rule's events.
+`filter: { "rule_id": "..." }` scopes a webhook to one rule's events —
+`rule_id` here is the rule's generated `id`, not its `name` (see above).
 Omit or set `filter: null` to receive every fault transition from every
 rule. There's currently no OR-list or point-level filtering — if you need
 a webhook that only cares about a subset of rules, register one webhook
@@ -72,6 +91,18 @@ time a retry fires (DNS rebinding), and only re-checking at send time
 actually closes that gap.
 
 This is enforced regardless of who's calling — the
-[gateway's basic auth](/architecture#the-gateway) is a checkpoint at the
-network edge, not what makes this safe. Any caller who can reach
-`POST /fault/webhooks` gets the same validation.
+[gateway's JWT auth](/gateway-auth) is a checkpoint at the network edge,
+not what makes this safe. Any caller who can reach `POST /fault/webhooks`
+gets the same validation.
+
+**Local testing**: set `TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS=1` in `.env`
+for `fault_api`/`fault_detector` to disable this check entirely — both the
+loopback/private-address rejection *and* the `https://`-only requirement
+above (a plain `http://` URL is accepted once this is set). It's a
+deployment-level env var, not a per-webhook field, so it can't be toggled
+through the API itself — **never set it in production.** If your receiver
+runs on the host and `fault_detector` runs in a container (the default
+`docker compose` setup), point the webhook at
+`http://host.docker.internal:<port>/`, not `http://127.0.0.1:<port>/` —
+`127.0.0.1` from inside the container is the container's own loopback,
+not the host's.
