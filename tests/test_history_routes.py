@@ -90,7 +90,12 @@ def test_history_round_trip_matches_documented_schema(gw, live_server, spec):
     assert resp.status_code == 200
     items = resp.json()
     _assert_matches_schema(items, spec, "/paths/~1history/get/responses/200/content/application~1json/schema")
-    assert items == [{"ts": t0, "value": 1.0}, {"ts": t0 + 1, "value": 2.0}]
+    # Postgres timestamptz is microsecond-resolution, so it can round a
+    # `time.time()` float's sub-microsecond digits differently than
+    # Python's own repr - exact equality here is a real, ~30%-of-the-time
+    # flake, not a schema/behavior bug. abs=1e-6 matches that resolution.
+    assert items[0]["value"] == 1.0 and items[0]["ts"] == pytest.approx(t0, abs=1e-6)
+    assert items[1]["value"] == 2.0 and items[1]["ts"] == pytest.approx(t0 + 1, abs=1e-6)
 
 
 @pytest.mark.integration

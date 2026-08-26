@@ -1,0 +1,207 @@
+---
+title: Gateway Auth
+---
+
+Every route on every API is JWT-verified in the gateway itself
+(`gateway/njs/`, policy in `gateway/njs/policy.js`) — not by per-backend
+Python auth code. This page covers the org/site/user/role model,
+`auth_api.py`'s login flow, how `policy.js` decides who can hit what, and
+the (separate, easy to conflate) backend defense-in-depth header. See
+[Architecture](/architecture#the-gateway) for where the gateway sits in
+the request path, and the [Auth API reference](/api/auth) for the full
+endpoint list.
+
+## Org / site / user / role model
+
+Four Postgres tables (`auth.SCHEMA` in `src/timberdoodle/auth.py`, created
+on `auth_api.py` startup via `auth.ensure_schema`):
+
+- **`orgs`** — the top-level tenant. Everything else hangs off an
+  `org_id`.
+- **`sites`** — a building/location within an org. Optional scoping unit:
+  a user or API key can be restricted to specific `site_ids`, or left
+  unscoped (`NULL`/empty = whole org).
+- **`users`** — `email` + PBKDF2-HMAC-SHA256 password hash (600k
+  iterations — OWASP's 2023+ recommendation, stdlib `hashlib` only, no
+  new dependency) + a `role`.
+- **`api_keys`** — long-lived, non-interactive credentials. Same role
+  vocabulary as users plus one extra: `service`. Each key has its own
+  `jti`, optional `expires_at`, and can carry `site_ids` narrower than
+  its org.
+
+Roles are ordinal, not a permission set you assemble per-route:
+`viewer < operator < admin`, plus `service` (an API-key-only class
+ranked equal to `operator` — `ROLE_RANK` in `policy.js` is
+`{ viewer: 1, operator: 2, admin: 3, service: 2 }`). A route's policy
+entry names one `minRole`; anything ranked at or above it passes. There's
+deliberately no separate role→resource permission matrix layered on top
+— each policy row already states exactly who can call it, and a second
+table encoding the same fact a different way is the first thing that
+goes stale when a route is added.
+
+## Bootstrapping: `POST /auth/orgs`
+
+There's no seed data and no superuser bootstrap script — the very first
+account is created through the API itself. `POST /auth/orgs` is public
+(no token required — `gateway/njs/policy.js` marks it
+`resource: null, minRole: null`, same as `/auth/login`) and does two
+things in one call: creates the org row and its first admin user,
+via `auth.create_org()`:
+
+```
+POST /auth/orgs
+{ "name": "Acme Property Co", "admin_email": "admin@acme.example", "admin_password": "..." }
+→ 201 { "id": "...", "name": "Acme Property Co", "admin_user_id": "..." }
+```
+
+This is the only way an org's first user gets created — every
+subsequent user comes from an admin calling `POST /auth/users` (itself
+`minRole: admin` in policy.js) with an already-valid token. Making org
+creation carry its own first-admin payload solves the obvious chicken-
+and-egg problem: an admin-only "create a user" endpoint has no answer for
+"who creates the very first admin."
+
+Both `/auth/orgs` and `/auth/login` sit behind their own per-source-IP
+`limit_req_zone` in plain nginx (`gateway/nginx.conf`, 5 requests/minute
+each, `limit_req_status 429`) — njs can't gate these two routes on a
+token (that's the whole point of them being public), so brute-forcing
+either is throttled at the nginx layer instead.
+
+## Login flow: `POST /auth/login` → Bearer token
+
+```
+POST /auth/login
+{ "email": "admin@acme.example", "password": "..." }
+→ 200 { "token": "<JWT>", "user": { "id": "...", "org_id": "...", "role": "admin", "site_ids": [] } }
+```
+
+`auth_api.py`'s `_login` handler (`src/timberdoodle/auth_api.py`) checks
+the password with `auth.verify_password`, looks up the user's
+`site_ids` via `auth.user_site_ids`, and signs a JWT with
+`auth.issue_session_token`. A session token's claims:
+
+```json
+{
+  "sub": "<user id>", "org_id": "...", "role": "admin", "site_ids": [],
+  "kind": "session", "jti": "...", "exp": <now + 12h>
+}
+```
+
+Every route after login expects that token as `Authorization: Bearer
+<token>`. There's no cookie, no server-side session store on the gateway
+side — the JWT itself, signed with `TIMBERDOODLE_JWT_SECRET`, is the
+whole session. `POST /auth/api-keys` (admin-only) issues the
+non-interactive equivalent — same claims shape, but `kind: "api_key"`,
+no `exp` unless `expires_in_seconds` was given, and revocable (see
+below), where a session token just expires after 12 hours
+(`auth.SESSION_TTL_SECONDS`) and can't be individually revoked before
+then.
+
+`/auth/login` itself has no `js_access` gate at all (a dedicated
+exact-match nginx `location`, not a `policy.js` row) — you can't require
+a valid token to go fetch one.
+
+## `gateway/njs/policy.js` — the route table
+
+`gateway/njs/main.js`'s `authorize(r)` (wired as `js_access
+main.authorize;` per protected `location`) is the actual gate; the table
+it reads lives entirely in `gateway/njs/policy.js`, one flat array so the
+whole access policy is reviewable in one file:
+
+```js
+// [method, path regex, resource, minRole]
+const ROUTES = [
+  ["POST", /^\/ingest\/ingest$/,       "points",      "operator"],
+  ["GET",  /^\/fault\/rules$/,          "rules",       "viewer"],
+  ["POST", /^\/derivation\/derivations$/, "derivations", "operator"],
+  ["POST", /^\/validate\/validate$/,     "validate",    "viewer"],
+  ["POST", /^\/auth\/users$/,            "auth",        "admin"],
+  ["POST", /^\/auth\/orgs$/,             null,          null], // public
+  // ...
+];
+```
+
+Paths are matched **as seen at the gateway**, service prefix included
+(`/fault/rules`, not `rules` stripped of its proxy prefix) — one row is
+the complete story for a route, no separate "which service is this"
+lookup needed to read it. `resolveRoute()` does a linear first-match scan
+(fine at this table's size); `main.js` treats **no match as deny, not
+fail-open** — an unmapped route under a proxied prefix returns `403 no
+policy defined for this route`, since a policy gap should be visible as
+a hard failure, not silently-permitted traffic.
+
+`authorize()`'s actual sequence per request:
+
+1. No matching route → `403`.
+2. `minRole === null` (public route) → allow, no token check, no rate
+   limit.
+3. No `Authorization: Bearer <token>` → `401`.
+4. Token doesn't verify against `TIMBERDOODLE_JWT_SECRET`
+   (`gateway/njs/jwt.js`) → `401`.
+5. `claims.role` doesn't rank ≥ the route's `minRole`
+   (`policy.roleSatisfies`) → `403`.
+6. Only for `kind === "api_key"` tokens: is `claims.jti` in
+   `ngx.shared.revoked` (refreshed from `auth_api`'s
+   `GET /internal/revoked-jtis` every 30s by a `js_periodic` handler) →
+   `401` if so. Session tokens skip this check entirely — their own
+   short expiry is treated as the guard, so there's no revocation list
+   to check against.
+7. Per-token rate limit (`gateway/njs/ratelimit.js`, `viewer: 120,
+   operator: 300, admin: 600, service: 1200` requests/minute, keyed by
+   `claims.sub`) → `429` if exceeded.
+
+Only after all six checks pass does the request reach a backend at all.
+
+## Two different secrets, two different jobs
+
+It's easy to conflate these because both live in `.env` and both get
+checked on (almost) every request, but they protect against different
+things:
+
+- **`TIMBERDOODLE_JWT_SECRET`** — signs and verifies the user-facing
+  session/API-key tokens (`Authorization: Bearer <token>`). This is the
+  one end users and API-key holders present. Verified in the gateway
+  (`gateway/njs/jwt.js`) and independently re-verified inside
+  `auth_api.py` itself (`auth.decode_own_token`) for handlers that need
+  to know who's calling — that's not "trust the gateway already checked
+  this," since `auth_api.py` *is* the identity service, not just another
+  backend behind it.
+- **`TIMBERDOODLE_GATEWAY_SECRET`** — a shared secret the gateway
+  attaches as `X-Gateway-Secret` on every request it forwards
+  (`r.variables.gateway_secret` in `main.js`, set unconditionally on
+  every invocation). Each backend checks it with
+  `gateway_auth.request_came_through_gateway()`
+  (`src/timberdoodle/gateway_auth.py`) — a single `hmac.compare_digest`
+  against the expected value, fail-closed if the env var isn't set at
+  all. This is **not** a second authorization layer re-deciding who can
+  do what; it only answers "did this request actually come through the
+  gateway's `js_access` checks, or did it hit this container's port
+  directly from a sibling on the same Docker network." All the
+  role/site/rate-limit logic already ran in the gateway by the time this
+  header is checked — this is defense in depth against bypassing the
+  gateway entirely, not a duplicate policy engine.
+
+Concretely: a request with a valid JWT but no route through the gateway
+(hitting `fault_api:8002` directly from another container) fails the
+`X-Gateway-Secret` check and gets a `401` from the backend itself, even
+though the JWT would have been fine. A request through the gateway with
+an invalid or missing JWT never gets that far — it's rejected by
+`authorize()` before `X-Gateway-Secret` is even relevant. Both `docker
+compose up` refuses to start the `gateway` service without **both**
+secrets set (`docker-compose.yml`'s `${TIMBERDOODLE_JWT_SECRET:?...}` /
+`${TIMBERDOODLE_GATEWAY_SECRET:?...}`) — an unset JWT secret means the
+gateway can't verify anything, and an unset gateway secret would mean
+every backend's `request_came_through_gateway()` fails closed on every
+single request.
+
+## What's not covered here
+
+Site-scoping (`site_ids` on a user or API key) exists in the schema and
+is carried in every token's claims, but nothing currently reads it back
+out. `gateway/njs/main.js`'s `authorize()` only checks role, not site;
+grepping the backends (`ingest_api.py`, `fault_api.py`,
+`derivation_api.py`, `validate_api.py`) turns up no `site_id` filtering
+either. A user or API key restricted to one site can, today, still see
+and touch every site in its org through any route its role permits —
+`site_ids` is plumbed through end-to-end but not yet enforced anywhere.
+Worth knowing before relying on it as an isolation boundary.

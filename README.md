@@ -16,7 +16,7 @@ envelope `mqtt_listener.py` and `POST /ingest` both consume.
 cp .env.example .env                                                     # first time only, see below
 echo "TIMBERDOODLE_JWT_SECRET=$(openssl rand -hex 32)" >> .env           # first time only
 echo "TIMBERDOODLE_GATEWAY_SECRET=$(openssl rand -hex 32)" >> .env       # first time only
-docker compose up -d
+docker compose up -d --wait   # waits for the 5 HTTP APIs' healthchecks, not just "container started"
 ```
 
 `docker compose up -d` refuses to start the gateway without both of
@@ -30,11 +30,15 @@ to `timberdoodle` if unset — fine for local dev, change it for anything
 else).
 
 That's everything — 5 infra containers (mosquitto, oxigraph, postgres,
-jaeger, grafana), all 7 processes below, and an nginx gateway in front of
+jaeger, grafana), all 8 processes below, and an nginx gateway in front of
 the 5 HTTP APIs, all with one shared lifecycle now. Each process is still
 its own container/image build target if you need to restart or update one
 independently (`docker compose up -d --build ingest_api`), but nothing
-requires manual per-process startup anymore.
+requires manual per-process startup anymore. The gateway won't start
+until all 5 HTTP APIs report healthy (`GET /openapi.yaml` on each), so
+`docker compose up -d --wait` (or plain `up -d` followed by `docker
+compose ps`) leaves you with a stack that's actually ready for the curl
+examples below, not just "containers exist."
 
 | Process | What it does | Port (direct) |
 |---|---|---|

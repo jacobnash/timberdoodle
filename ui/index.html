@@ -10,7 +10,16 @@
     <h1>Timberdoodle</h1>
     <span id="status">connecting…</span>
   </header>
-  <main>
+  <div id="login-gate" class="login-gate" hidden>
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="hint" hidden></p>
+    </form>
+  </div>
+  <main id="main">
     <nav id="tree" aria-label="Equipment and points"></nav>
     <section id="detail">
       <p class="hint">Select a point on the left to see its tags and history.</p>

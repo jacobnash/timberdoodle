@@ -96,6 +96,11 @@ services:
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
+    healthcheck: &http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.yaml')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   fault_api:
     build: .
@@ -104,6 +109,9 @@ services:
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
+    healthcheck:
+      <<: *http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/openapi.yaml')"]
 
   fault_detector:
     build: .
@@ -120,6 +128,9 @@ services:
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
+    healthcheck:
+      <<: *http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/openapi.yaml')"]
 
   derivation_engine:
     build: .
@@ -136,6 +147,9 @@ services:
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
+    healthcheck:
+      <<: *http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/openapi.yaml')"]
 
   auth_api:
     build: .
@@ -144,6 +158,9 @@ services:
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
+    healthcheck:
+      <<: *http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/openapi.yaml')"]
 
   haystack_puller:
     build: .
@@ -180,11 +197,16 @@ services:
       - ./gateway/njs:/etc/nginx/njs:ro
       - ./ui:/usr/share/nginx/ui:ro
     depends_on:
-      - ingest_api
-      - fault_api
-      - derivation_api
-      - validate_api
-      - auth_api
+      ingest_api:
+        condition: service_healthy
+      fault_api:
+        condition: service_healthy
+      derivation_api:
+        condition: service_healthy
+      validate_api:
+        condition: service_healthy
+      auth_api:
+        condition: service_healthy
 
 volumes:
   oxigraph-data:

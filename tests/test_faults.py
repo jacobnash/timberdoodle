@@ -30,11 +30,13 @@ def conn():
     return c
 
 
+@pytest.mark.integration
 def test_open_fault_returns_id_on_first_open(conn):
     fault_id = open_fault(conn, "test-faults:range", "urn:point:test-faults:a", datetime.now(timezone.utc))
     assert fault_id is not None
 
 
+@pytest.mark.integration
 def test_open_fault_is_a_noop_when_already_open(conn):
     now = datetime.now(timezone.utc)
     first_id = open_fault(conn, "test-faults:range", "urn:point:test-faults:b", now)
@@ -47,6 +49,7 @@ def test_open_fault_is_a_noop_when_already_open(conn):
     assert len(open_rows) == 1
 
 
+@pytest.mark.integration
 def test_close_fault_returns_id_then_none_on_repeat(conn):
     now = datetime.now(timezone.utc)
     open_fault(conn, "test-faults:range", "urn:point:test-faults:c", now)
@@ -58,10 +61,12 @@ def test_close_fault_returns_id_then_none_on_repeat(conn):
     assert second_close is None  # nothing open anymore - no-op
 
 
+@pytest.mark.integration
 def test_close_fault_on_nothing_open_is_a_noop(conn):
     assert close_fault(conn, "test-faults:range", "urn:point:test-faults:never-opened", datetime.now(timezone.utc)) is None
 
 
+@pytest.mark.integration
 def test_reopen_after_close_gets_a_new_row(conn):
     now = datetime.now(timezone.utc)
     open_fault(conn, "test-faults:range", "urn:point:test-faults:d", now)
@@ -73,6 +78,7 @@ def test_reopen_after_close_gets_a_new_row(conn):
     assert len(all_rows) == 2
 
 
+@pytest.mark.integration
 def test_list_faults_filters_by_status(conn):
     now = datetime.now(timezone.utc)
     open_fault(conn, "test-faults:range", "urn:point:test-faults:e", now)
@@ -83,6 +89,7 @@ def test_list_faults_filters_by_status(conn):
     assert {f["point_uri"] for f in open_only} == {"urn:point:test-faults:e"}
 
 
+@pytest.mark.integration
 def test_webhook_health_disables_after_threshold(conn):
     webhook_id = "test-faults:webhook-1"
     disabled = False
@@ -93,6 +100,7 @@ def test_webhook_health_disables_after_threshold(conn):
     assert is_webhook_disabled(conn, webhook_id) is True
 
 
+@pytest.mark.integration
 def test_webhook_health_success_resets_failure_count(conn):
     webhook_id = "test-faults:webhook-2"
     record_webhook_failure(conn, webhook_id, "timeout", disable_threshold=5)
@@ -106,6 +114,7 @@ def test_webhook_health_success_resets_failure_count(conn):
     assert is_webhook_disabled(conn, webhook_id) is False
 
 
+@pytest.mark.integration
 def test_enable_webhook_clears_disabled_state(conn):
     webhook_id = "test-faults:webhook-3"
     for _ in range(5):
@@ -116,6 +125,7 @@ def test_enable_webhook_clears_disabled_state(conn):
     assert is_webhook_disabled(conn, webhook_id) is False
 
 
+@pytest.mark.integration
 def test_list_webhook_health_returns_every_webhook_keyed_by_id(conn):
     record_webhook_failure(conn, "test-faults:webhook-4", "timeout", disable_threshold=5)
     record_webhook_failure(conn, "test-faults:webhook-4", "timeout", disable_threshold=5)

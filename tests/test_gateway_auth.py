@@ -24,6 +24,23 @@ import requests
 BASE = "http://localhost:8080"
 
 
+def _post_with_retry(url, json):
+    """POST, retrying on 429. The gateway's /auth/login and /auth/orgs
+    rate limits (gateway/nginx.conf, 5r/m + burst=5) are shared across
+    every test file that logs in during a full-suite run - no single
+    file can predict how much of that shared budget earlier files left
+    it. Retrying is correct client behavior against a real rate limit,
+    not a workaround for a bug."""
+    resp = None
+    for attempt in range(10):
+        resp = requests.post(url, json=json)
+        if resp.status_code != 429:
+            return resp
+        if attempt < 9:
+            time.sleep(8)
+    return resp
+
+
 def _cleanup_test_orgs():
     """Same "Test Org" name-prefix cleanup as test_auth.py/test_auth_openapi.py,
     but via direct Postgres access (not the HTTP API, which has no
@@ -52,13 +69,13 @@ def _cleanup_test_orgs():
 @pytest.fixture
 def org_and_admin_token():
     _cleanup_test_orgs()
-    org_resp = requests.post(
+    org_resp = _post_with_retry(
         f"{BASE}/auth/orgs",
         json={"name": "Gateway Test Org", "admin_email": "admin@gateway-test.invalid", "admin_password": "correct-horse-battery-staple"},
     )
     assert org_resp.status_code == 201, org_resp.text
     org = org_resp.json()
-    login_resp = requests.post(f"{BASE}/auth/login", json={"email": "admin@gateway-test.invalid", "password": "correct-horse-battery-staple"})
+    login_resp = _post_with_retry(f"{BASE}/auth/login", json={"email": "admin@gateway-test.invalid", "password": "correct-horse-battery-staple"})
     assert login_resp.status_code == 200, login_resp.text
     token = login_resp.json()["token"]
     yield org, token
@@ -100,7 +117,7 @@ def test_viewer_role_gets_403_on_admin_only_route(org_and_admin_token):
     )
     assert user_resp.status_code == 201
 
-    viewer_login = requests.post(f"{BASE}/auth/login", json={"email": "viewer@gateway-test.invalid", "password": "viewer-pw-123"})
+    viewer_login = _post_with_retry(f"{BASE}/auth/login", json={"email": "viewer@gateway-test.invalid", "password": "viewer-pw-123"})
     viewer_token = viewer_login.json()["token"]
 
     resp = requests.post(f"{BASE}/auth/sites", headers={"Authorization": f"Bearer {viewer_token}"}, json={"name": "nope"})
@@ -147,6 +164,60 @@ def test_revoked_api_key_is_rejected_after_one_poll_interval(org_and_admin_token
 
     resp = requests.get(f"{BASE}/auth/me", headers=key_headers)
     assert resp.status_code == 401
+
+
+@pytest.mark.integration
+def test_role_ordinal_gating_across_routes_and_roles(org_and_admin_token):
+    """Only one role/route combination (viewer vs. an admin-only route)
+    was covered before this test - exercises the actual ordinal property
+    from policy.js's roleSatisfies() (viewer < operator < admin) across
+    multiple services and multiple roles in one pass: one admin login
+    (from the fixture, reused - not repeated), one viewer login, one
+    operator login. Login calls go through _post_with_retry rather than
+    manually-tuned sleeps between them - how much of the shared
+    rate-limit budget is left when this test starts depends on what ran
+    before it (this file alone, or the full suite with test_e2e_journey.py
+    also spending some of the same budget), so a fixed sleep tuned for
+    one scenario silently breaks in the other."""
+    org, admin_token = org_and_admin_token
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    viewer_resp = requests.post(
+        f"{BASE}/auth/users", headers=admin_headers,
+        json={"email": "ordinal-viewer@gateway-test.invalid", "password": "viewer-pw-123", "role": "viewer"},
+    )
+    assert viewer_resp.status_code == 201, viewer_resp.text
+    viewer_login = _post_with_retry(f"{BASE}/auth/login", json={"email": "ordinal-viewer@gateway-test.invalid", "password": "viewer-pw-123"})
+    assert viewer_login.status_code == 200, viewer_login.text
+    viewer_headers = {"Authorization": f"Bearer {viewer_login.json()['token']}"}
+
+    operator_resp = requests.post(
+        f"{BASE}/auth/users", headers=admin_headers,
+        json={"email": "ordinal-operator@gateway-test.invalid", "password": "operator-pw-123", "role": "operator"},
+    )
+    assert operator_resp.status_code == 201, operator_resp.text
+    operator_login = _post_with_retry(f"{BASE}/auth/login", json={"email": "ordinal-operator@gateway-test.invalid", "password": "operator-pw-123"})
+    assert operator_login.status_code == 200, operator_login.text
+    operator_headers = {"Authorization": f"Bearer {operator_login.json()['token']}"}
+
+    # viewer: 200 on a viewer-minimum route (GET /ingest/history), 403
+    # on the operator-minimum route on the same service (POST /ingest/ingest).
+    resp = requests.get(f"{BASE}/ingest/history", headers=viewer_headers, params={"point": "gateway-test/ordinal-point"})
+    assert resp.status_code == 200, resp.text
+    resp = requests.post(f"{BASE}/ingest/ingest", headers=viewer_headers, json={"point": "gateway-test/ordinal-point", "value": 1.0})
+    assert resp.status_code == 403, resp.text
+
+    # operator: 204 on the operator-minimum route it was just denied,
+    # but still 403 on an admin-only route (operator doesn't satisfy admin).
+    resp = requests.post(f"{BASE}/ingest/ingest", headers=operator_headers, json={"point": "gateway-test/ordinal-point", "value": 2.0})
+    assert resp.status_code == 204, resp.text
+    resp = requests.post(f"{BASE}/auth/sites", headers=operator_headers, json={"name": "nope"})
+    assert resp.status_code == 403, resp.text
+
+    # admin (fixture's token, no extra login): the ordinal property
+    # itself - a higher role must still satisfy a lower-minRole route.
+    resp = requests.get(f"{BASE}/ingest/history", headers=admin_headers, params={"point": "gateway-test/ordinal-point"})
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.integration

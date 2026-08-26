@@ -57,7 +57,7 @@ const config: ZudokuConfig = {
       type: "category",
       label: "Documentation",
       icon: "book",
-      items: ["/introduction", "/architecture", "/fault-detection", "/webhooks", "/validate", "/haxall-drop-in", "/haystack-puller", "/adding-a-data-source"],
+      items: ["/introduction", "/architecture", "/gateway-auth", "/fault-detection", "/webhooks", "/validate", "/haxall-drop-in", "/haystack-puller", "/adding-a-data-source"],
     },
     {
       type: "category",

@@ -16,6 +16,66 @@ const HAYSTACK = "urn:timberdoodle:haystack#";
 const statusEl = document.getElementById("status");
 const treeEl = document.getElementById("tree");
 const detailEl = document.getElementById("detail");
+const mainEl = document.getElementById("main");
+const loginGateEl = document.getElementById("login-gate");
+const loginFormEl = document.getElementById("login-form");
+const loginErrorEl = document.getElementById("login-error");
+
+// Gateway auth (see gateway/njs/policy.js) - only routes proxied through
+// the gateway need a Bearer token; the direct-to-Oxigraph SPARQL calls
+// below are unauthenticated (CORS-open, see docker-compose.yml's `--cors`
+// flag) and untouched by any of this.
+const AUTH_API_URL = params.get("auth") || "/auth";
+const TOKEN_KEY = "td_token";
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+const authHeaders = () => {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+function showLoginGate() {
+  mainEl.hidden = true;
+  loginGateEl.hidden = false;
+}
+
+function hideLoginGate() {
+  loginGateEl.hidden = true;
+  mainEl.hidden = false;
+}
+
+// Covers token expiry: any gateway-fronted fetch that comes back 401
+// drops the stale token and re-shows the login form.
+function handleUnauthorized() {
+  clearToken();
+  showLoginGate();
+}
+
+loginFormEl.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  loginErrorEl.hidden = true;
+  const email = document.getElementById("login-email").value;
+  const password = document.getElementById("login-password").value;
+  try {
+    const res = await fetch(`${AUTH_API_URL}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) {
+      throw new Error(res.status === 401 ? "invalid email or password" : `login failed: ${res.status}`);
+    }
+    const body = await res.json();
+    setToken(body.token);
+    hideLoginGate();
+    statusEl.textContent = "connecting…";
+    init();
+  } catch (err) {
+    loginErrorEl.textContent = err.message;
+    loginErrorEl.hidden = false;
+  }
+});
 
 async function sparql(query) {
   const res = await fetch(OXIGRAPH_URL, {
@@ -94,7 +154,11 @@ async function loadTags(pointUri) {
 
 async function loadHistory(topic) {
   const url = `${INGEST_API_URL}/history?point=${encodeURIComponent(topic)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: authHeaders() });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error("session expired");
+  }
   if (!res.ok) throw new Error(`history fetch failed: ${res.status}`);
   return res.json(); // [{ts, value}, ...]
 }
@@ -405,4 +469,9 @@ async function init() {
   }
 }
 
-init();
+if (getToken()) {
+  hideLoginGate();
+  init();
+} else {
+  showLoginGate();
+}

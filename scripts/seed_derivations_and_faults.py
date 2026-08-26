@@ -54,6 +54,8 @@ ponytail: real gap, not silently worked around - add a `rate` fault type
 import argparse
 import json
 import os
+import time
+import urllib.error
 import urllib.request
 
 from rdflib import URIRef
@@ -91,9 +93,20 @@ def _login(auth_api_url: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
-        _bearer_token = json.loads(resp.read())["token"]
-    return _bearer_token
+    # Retry on 429 - the gateway's /auth/login rate limit (5r/m, burst=5,
+    # gateway/nginx.conf) is tight enough that a script run shortly after
+    # other login traffic (another run of this script, a test suite) can
+    # get throttled; retrying with backoff is correct client behavior
+    # against a real rate limit, not a workaround.
+    for attempt in range(10):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                _bearer_token = json.loads(resp.read())["token"]
+            return _bearer_token
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == 9:
+                raise
+            time.sleep(8)
 
 
 def _post(url: str, body: dict, auth_api_url: str) -> dict | None:
