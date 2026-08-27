@@ -31,6 +31,7 @@ def test_load_equip_rules_returns_ahu_and_vav():
         "Boiler",
         "Pump",
         "Exhaust_Fan",
+        "Weather_Station",
     }
 
 

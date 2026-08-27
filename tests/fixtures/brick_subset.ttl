@@ -878,6 +878,71 @@ brick:Zone_Air_Temperature_Setpoint a owl:Class ;
     brick:deprecationMitigationMessage "The class 'Zone_Air_Temperature_Setpoint' is deprecated in favor of more explicit class names to distinguish target and cooling/heating setpoints." ;
     brick:isReplacedBy brick:Target_Zone_Air_Temperature_Setpoint .
 
+brick:Weather_Station a owl:Class,
+        sh:NodeShape ;
+    rdfs:seeAlso <https://bedes.lbl.gov/bedes-online/weather-station> ;
+    rdfs:subClassOf brick:Equipment ;
+    skos:definition "A dedicated weather measurement station"@en ;
+    brick:hasAssociatedTag tag:Equipment,
+        tag:Station,
+        tag:Weather .
+
+brick:Speed_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures the magnitude of velocity of some form of movement"@en ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Sensor,
+        tag:Speed ;
+    brick:hasQuantity brick:Speed .
+
+brick:Wind_Speed_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Speed_Sensor ;
+    skos:definition "Measured speed of wind, caused by air moving from high to low pressure"@en ;
+    brick:hasAssociatedTag tag:Point,
+        tag:Sensor,
+        tag:Speed,
+        tag:Wind ;
+    brick:hasQuantity brick:Linear_Speed .
+
+brick:Direction_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures the direction in degrees in which a phenomenon is occuring"@en ;
+    brick:hasAssociatedTag tag:Direction,
+        tag:Point,
+        tag:Sensor .
+
+brick:Wind_Direction_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Direction_Sensor ;
+    skos:definition "Measures the direction of wind in degrees relative to North"@en ;
+    brick:hasAssociatedTag tag:Direction,
+        tag:Point,
+        tag:Sensor,
+        tag:Wind ;
+    brick:hasQuantity brick:Wind_Direction .
+
+brick:Solar_Irradiance_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Measures solar irradiance levels for photovoltaic systems"@en ;
+    brick:hasAssociatedTag tag:Irradiance,
+        tag:Point,
+        tag:Sensor,
+        tag:Solar ;
+    brick:hasQuantity brick:Solar_Irradiance .
+
+brick:Dewpoint_Sensor a owl:Class,
+        sh:NodeShape ;
+    rdfs:seeAlso <https://en.wikipedia.org/wiki/Dew_point> ;
+    rdfs:subClassOf brick:Sensor ;
+    skos:definition "Senses the dewpoint temperature . Dew point is the temperature to which air must be cooled to become saturated with water vapor"@en ;
+    brick:hasAssociatedTag tag:Dewpoint,
+        tag:Point,
+        tag:Sensor .
+
 brick:Zone_CO2_Level_Sensor a owl:Class,
         sh:NodeShape ;
     rdfs:label "Zone CO2 Level Sensor"@en ;

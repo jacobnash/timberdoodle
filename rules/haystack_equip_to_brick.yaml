@@ -30,3 +30,5 @@ rules:
     brick_class: Pump  # verified: pump is real (phIoT/lib/motor.trio - a marker usable on equip or point, same pattern as `fan` below); Pump subClassOf HVAC_Equipment
   - tags: [exhaust, fan]
     brick_class: Exhaust_Fan  # verified: exhaust (phIoT/lib/conduit.trio) + fan (phIoT/lib/motor.trio) both real markers; Exhaust_Fan subClassOf Fan subClassOf HVAC_Equipment
+  - tags: [weatherStation]
+    brick_class: Weather_Station  # verified: weatherStation is a real Haystack v4 marker (phIoT/lib, project-haystack.org/doc/lib-phIoT/weatherStation - "Logical weather station and its measurement points"); Brick's Weather_Station (brickschema.org/schema/Brick.ttl) subClassOf Equipment

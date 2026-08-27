@@ -180,6 +180,23 @@ services:
       oxigraph:
         condition: service_started
 
+  openmeteo_puller:
+    build: .
+    command: python -m timberdoodle.openmeteo_puller
+    profiles: ["openmeteo-pull"]
+    environment:
+      <<: *daemon-env
+      OPENMETEO_LATITUDE: ${OPENMETEO_LATITUDE:-}
+      OPENMETEO_LONGITUDE: ${OPENMETEO_LONGITUDE:-}
+      OPENMETEO_STATION_ID: ${OPENMETEO_STATION_ID:-openmeteo}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oxigraph:
+        condition: service_started
+
   gateway:
     image: nginx:alpine
     ports:

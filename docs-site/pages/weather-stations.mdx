@@ -1,0 +1,162 @@
+---
+title: Weather Stations
+---
+
+"Add your own" weather station — a device or a WWW API recorded as
+points, the same way SkySpark models a weather station. Two independent
+paths, pick either or both:
+
+- **A local device** (indoor/outdoor sensor, a Raspberry Pi with a USB
+  weather station, whatever you've got) — nothing reaches the internet,
+  see [Local device](#local-device) below.
+- **No local hardware** — `openmeteo_puller` pulls current conditions from
+  [Open-Meteo](https://open-meteo.com), free and no API key/signup
+  needed, see [WWW fallback: Open-Meteo](#www-fallback-open-meteo) below.
+
+Both land in the same place: a `Weather_Station` equip with
+`weather`-tagged points, classified by the same
+`rules/haystack_to_brick.yaml` rules either way, so downstream queries
+don't care which one fed them. Run both at once (different
+`--station-id`s) to compare a real local sensor against the WWW estimate
+for the same site — they get different URIs, no collision.
+
+## Local device
+
+There's no code here you have to write into Timberdoodle itself — a
+weather station is a native MQTT device with a live connection, so it
+goes through the exact same envelope `mqtt_listener.py` already handles
+for every other MQTT-sourced device (see
+[Adding a Data Source](/adding-a-data-source)'s "push, protocol-native"
+case). What follows is the tag vocabulary and topic convention to use,
+plus `scripts/publish_weather_station.py`, a small helper that hides the
+wire format. Your device (or a script running next to it) publishes
+straight to Timberdoodle's own `mosquitto` broker (`docker-compose.yml`'s
+`mosquitto` service, already part of the default stack) — no remote
+weather API, no `--profile`-gated puller, no `REMOTE_*_URL` to configure.
+
+## The topic convention
+
+`mqtt_listener.py` only subscribes to `fbf/#` by default — nothing in
+`docker-compose.yml` overrides `--topic-pattern`. Publish under
+`fbf/weather/<station-id>/...`, not just `weather/...`, or the listener
+never sees it (this isn't FBF-specific data, it's just the one topic
+filter the listener is already watching).
+
+For a station id `backyard`, publish:
+
+| Topic | Payload | Purpose |
+|---|---|---|
+| `fbf/weather/backyard/equip/tags` | `{"value": "{\"tags\": {...}, \"points\": [...]}"}` | Registers the station as one Brick equipment entity |
+| `fbf/weather/backyard/<point>/tags` | `{"value": "{...tags...}"}` | Tags one point (e.g. `temp`, `wind-speed`) |
+| `fbf/weather/backyard/<point>` | `{"value": <number>, "ts": <unix epoch, optional>}` | One reading |
+
+The double-JSON-encoding (`value` is itself a JSON string for the two
+`/tags` topics, but a raw number for a reading) is `mqtt_listener.py`'s
+real, existing envelope — not something new. `scripts/publish_weather_station.py`
+wraps it so you don't have to get this by hand.
+
+## Tag vocabulary
+
+Real Haystack v4 markers (`project-haystack.org/doc/lib-phIoT/weatherStation`)
+so `rules/haystack_to_brick.yaml` and `rules/haystack_equip_to_brick.yaml`
+classify them into real Brick classes:
+
+| Entity | Markers | Brick class |
+|---|---|---|
+| the station (equip) | `weatherStation` | `Weather_Station` |
+| temperature point | `weather`, `air`, `temp`, `sensor` | `Air_Temperature_Sensor` |
+| humidity point | `weather`, `air`, `humidity`, `sensor` | `Relative_Humidity_Sensor` |
+| dew point | `weather`, `air`, `dewPoint`, `sensor` | `Dewpoint_Sensor` |
+| wind speed | `weather`, `wind`, `speed`, `sensor` | `Wind_Speed_Sensor` |
+| wind direction | `weather`, `wind`, `direction`, `sensor` | `Wind_Direction_Sensor` |
+| solar irradiance | `weather`, `solar`, `irradiance`, `sensor` | `Solar_Irradiance_Sensor` |
+
+Any other weather metric (precipitation, cloudage, visibility, ...) still
+gets ingested and tagged losslessly — `mapping.classify_point` just falls
+back to a `PROJ:*` class (or `TD:UnmappedPoint` if there's no overlap at
+all) instead of a direct Brick match; see `mapping.py`'s three-outcome
+doc comment. Add a rule for one once you actually have a real point tagged
+that way, rather than guessing markers for metrics nobody's publishing yet.
+
+## Try it: the demo publisher
+
+```bash
+python -m scripts.publish_weather_station --station-id backyard --demo
+```
+
+Publishes one made-up round of temp/humidity/wind-speed/wind-direction
+readings under `fbf/weather/backyard/*` and exits. With the default stack
+running (`mqtt_listener` picks the messages up automatically), you'll see
+the raw tags and readings land immediately; **classification into Brick
+doesn't happen automatically for MQTT-sourced entities** — `mqtt_listener.py`
+never calls `mapping.classify_point`, only `ingest_api.py`'s HTTP `/tags`
+route does that inline. Run the same one-shot sweep any other MQTT source
+needs:
+
+```bash
+python -m timberdoodle.autotag --no-llm
+```
+
+(`--no-llm` skips the `ANTHROPIC_API_KEY` requirement — rule-engine-only,
+which is all seven classes above need.)
+
+## Wiring a real device
+
+Import the three functions instead of using `--demo`:
+
+```python
+from scripts.publish_weather_station import publish_equip_tags, publish_point_tags, publish_reading
+import paho.mqtt.client as mqtt
+
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client.connect("localhost", 1883)  # or MQTT_HOST inside compose
+client.loop_start()
+
+topic_prefix = "fbf/weather/backyard"
+publish_equip_tags(client, topic_prefix, {"weatherStation": True, "dis": "Backyard Station"}, ["temp", "wind-speed"])
+publish_point_tags(client, topic_prefix, "temp", {"weather": True, "air": True, "temp": True, "sensor": True})
+publish_point_tags(client, topic_prefix, "wind-speed", {"weather": True, "wind": True, "speed": True, "sensor": True})
+
+while True:
+    publish_reading(client, topic_prefix, "temp", read_your_sensor())
+    time.sleep(60)
+```
+
+Equip/point tags only need publishing once (`retain=True` inside
+`publish_equip_tags`/`publish_point_tags` means a restarted `mqtt_listener`
+replays them) — the loop is just readings.
+
+## WWW fallback: Open-Meteo
+
+`openmeteo_puller.py` pulls current conditions (temperature, humidity,
+wind speed, wind direction) from [Open-Meteo](https://open-meteo.com) for
+a fixed latitude/longitude, on a 15-minute tick by default (Open-Meteo's
+own current-conditions data refreshes about that often — polling faster
+just re-reads the same value). No API key or account needed for
+non-commercial use, unlike every other puller in this repo — just a
+location. It ingests through `ingest.py`/`mapping.py` directly (no MQTT
+hop) and classifies inline, so — unlike the local-device path above — a
+separate `autotag` sweep isn't needed.
+
+Not part of the default stack — gated behind its own compose profile,
+same shape as `haystack_puller`/`energystar_puller`:
+
+```bash
+docker compose --profile openmeteo-pull up -d openmeteo_puller
+```
+
+Set `OPENMETEO_LATITUDE`/`OPENMETEO_LONGITUDE` first (see `.env.example`).
+Same blank-safe-but-silently-broken shape as every other puller here:
+`docker-compose.yml` passes both through as `${VAR:-}`, so the container
+starts even with them unset, then fails every pull cycle (Open-Meteo 400s
+on a missing latitude) instead of refusing to start.
+
+To try it standalone, outside compose, against a real location:
+
+```bash
+python -m timberdoodle.openmeteo_puller --latitude 37.7749 --longitude -122.4194 --station-id sf --once
+```
+
+`--once` pulls a single round and exits — prints the classification
+outcome (`direct`/`fallback`/`miss`) per variable — instead of polling
+forever.

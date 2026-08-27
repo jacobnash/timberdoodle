@@ -58,3 +58,25 @@ rules:
     brick_class: Electric_Power_Sensor  # verified: brickschema.org/schema/Brick.ttl, subClassOf Power_Sensor
   - tags: [elec, energy, sensor]
     brick_class: Electric_Energy_Sensor  # verified: brickschema.org/schema/Brick.ttl, subClassOf Energy_Sensor
+  #
+  # Weather station points (phIoT/lib weatherStation protos, e.g.
+  # weather-wind-speed-sensor-point at project-haystack.org/doc/lib-phIoT/
+  # weatherStation - real markers, each proto's name is literally its
+  # marker tags joined by hyphens). Every point under a weatherStation
+  # equip carries `weather` alongside these; deliberately not required
+  # here (matches this file's existing convention of the smallest
+  # distinguishing subset, e.g. the zone/humidity rule above omits
+  # `relative`) since these generic classes are correct with or without
+  # a weather station attached.
+  - tags: [wind, speed, sensor]
+    brick_class: Wind_Speed_Sensor  # verified: Brick.ttl subClassOf Speed_Sensor; hasAssociatedTag Point,Sensor,Speed,Wind
+  - tags: [wind, direction, sensor]
+    brick_class: Wind_Direction_Sensor  # verified: Brick.ttl subClassOf Direction_Sensor; hasAssociatedTag Direction,Point,Sensor,Wind
+  - tags: [solar, irradiance, sensor]
+    brick_class: Solar_Irradiance_Sensor  # verified: Brick.ttl subClassOf Sensor; hasAssociatedTag Irradiance,Point,Sensor,Solar
+  - tags: [dewPoint, sensor]
+    brick_class: Dewpoint_Sensor  # verified: Haystack marker is camelCase "dewPoint" (weather-air-dewPoint-sensor-point proto); Brick class/tag spelling is "Dewpoint" - same real-but-differently-spelled trap this file's header warns about
+  - tags: [air, humidity, sensor]
+    brick_class: Relative_Humidity_Sensor  # verified: generic (no zone/outside prefix) - Brick.ttl subClassOf Humidity_Sensor; a weatherStation's "weather air humidity sensor" point has no zone/outside marker so the more specific rules above correctly don't match it
+  - tags: [air, temp, sensor]
+    brick_class: Air_Temperature_Sensor  # verified: generic ancestor of the zone/discharge/return/mixed/outside rules above - those all stay more specific (larger tag set) and still win the tie-break; only fires for temp points with none of those location markers, e.g. a weatherStation's plain "weather air temp sensor" point
