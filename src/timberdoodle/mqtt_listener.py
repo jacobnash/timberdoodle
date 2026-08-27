@@ -26,6 +26,28 @@ from timberdoodle.timeseries import connect
 tracer = tracing.get_tracer(__name__)
 
 
+def make_on_connect(topic_pattern):
+    def on_connect(client, userdata, flags, reason_code, properties):
+        with tracer.start_as_current_span("mqtt_listener.on_connect") as span:
+            span.set_attribute("reason_code", str(reason_code))
+            # Re-subscribing here (not just once before loop_forever()) is
+            # required: a reconnect gets a fresh broker-side session unless
+            # both sides agree on clean_session=False + a stable client_id,
+            # and even then re-issuing the subscribe is what actually
+            # restores delivery - on_connect fires on every reconnect, not
+            # just the first connect.
+            client.subscribe(topic_pattern, qos=1)
+            print(f"connected ({reason_code}), subscribed to {topic_pattern}")
+
+    return on_connect
+
+
+def on_disconnect(client, userdata, flags, reason_code, properties=None):
+    with tracer.start_as_current_span("mqtt_listener.on_disconnect") as span:
+        span.set_attribute("reason_code", str(reason_code))
+        print(f"disconnected ({reason_code}) - paho will auto-reconnect")
+
+
 def make_on_message(store, ts_conn):
     def on_message(client, userdata, msg):
         with tracer.start_as_current_span("mqtt_listener.on_message") as span:
@@ -110,10 +132,15 @@ def main() -> None:
     store = RemoteStore()
     ts_conn = connect()
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    # clean_session=False + a stable client_id makes the session (and
+    # mosquitto's default queued-message retention, ~1000 messages) survive
+    # both a mid-process reconnect and a listener restart, instead of every
+    # run getting a fresh random id and a fresh (empty) broker-side session.
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="timberdoodle-mqtt-listener", clean_session=False)
+    client.on_connect = make_on_connect(args.topic_pattern)
+    client.on_disconnect = on_disconnect
     client.on_message = make_on_message(store, ts_conn)
     client.connect(args.mqtt_host, args.mqtt_port)
-    client.subscribe(args.topic_pattern)
     print(f"listening on {args.topic_pattern} @ {args.mqtt_host}:{args.mqtt_port}")
     client.loop_forever()
 
