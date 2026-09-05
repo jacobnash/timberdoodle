@@ -17,3 +17,15 @@ commands to compare after later stages land.
 | `webhooks.py` mutation score | same `mutmut run` | 100% (0 survivors) |
 
 See `AUDIT.md` for full methodology, per-finding evidence, and what's explicitly out of scope for these numbers (e.g. `ui/` has no coverage/mutation tooling by design — buildless, no test runner).
+
+## After Stage 0-2 (PLAN.md)
+
+| Metric | Before | After |
+|---|---|---|
+| `ruff check` (default rule set) | 63 | 62 (one finding was in a since-stashed WIP file, not fixed by this work) |
+| `mypy` errors | 19 | 9 |
+| `ruff` `BLE001`/`RUF013` | 9 / 3 | 0 / 0 (Stage 1.4) |
+| Python duplication | 6.06% (645 lines, 50 clones) | 3.79% (404 lines, 30 clones) (Stage 1.3 + Stage 2.1) |
+| `mapping.py` mutation score | 70.6% (96 survivors) | closed the specific `classify_point` fallback-path gap `mutmut` flagged (Stage 0.3); full re-run not repeated here |
+
+Stage 2.1 (extracting `http_handler_base.py` for the 5 stdlib HTTP APIs) is the largest single contributor to the duplication drop. Full audit-tool re-run (radon/vulture/full mutmut) not repeated here — see `AUDIT.md` for the original methodology if a fresh full pass is wanted later.
