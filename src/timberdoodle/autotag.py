@@ -58,6 +58,42 @@ def find_unclassified(store) -> list[URIRef]:
     return [URIRef(row.entity) for row in rows]
 
 
+def _classify_with_retries(store, uri, rules, llm_classify):
+    """Retries classify_point_with_fallback up to _MAX_ATTEMPTS times on
+    the transient failures _MAX_ATTEMPTS's own comment explains (a load/
+    timing hiccup, not a bad request). Returns None once attempts are
+    exhausted instead of raising, so run() reports and skips that one
+    entity rather than aborting the whole sweep."""
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return mapping.classify_point_with_fallback(store, uri, rules=rules, llm_classify=llm_classify)
+        except (
+            requests.exceptions.HTTPError,
+            requests.exceptions.ConnectionError,
+            llm_classifier.LLMClassificationError,
+        ) as exc:
+            if attempt == _MAX_ATTEMPTS:
+                print(f"{uri}: FAILED after {_MAX_ATTEMPTS} attempts ({exc}) - skipping")
+            else:
+                time.sleep(_RETRY_DELAY_SECONDS)
+    return None
+
+
+def _propose_rule_for_llm_classification(store, uri, brick_class: str, rules_path: str) -> None:
+    tags = mapping.read_tags(store, uri)
+    if llm_classifier.propose_rule(rules_path, tags, brick_class):
+        print(f"  proposed new rule for {sorted(tags)} -> {brick_class} in {rules_path}")
+
+
+def _rules_for_entity(uri, point_rules, equip_rules, known_point_classes, known_equip_classes):
+    """Points and equip share the same tagging shape (see ingest.py) but
+    each has its own rule file/known-class-set - the only thing that
+    differs by uri's own urn:equip: vs urn:point: prefix."""
+    if uri.startswith("urn:equip:"):
+        return equip_rules, EQUIP_RULES_PATH, known_equip_classes
+    return point_rules, POINT_RULES_PATH, known_point_classes
+
+
 def run(store, llm_classify=None, propose_rules: bool = True) -> None:
     point_rules = mapping.load_rules(POINT_RULES_PATH)
     equip_rules = mapping.load_rules(EQUIP_RULES_PATH)
@@ -65,34 +101,16 @@ def run(store, llm_classify=None, propose_rules: bool = True) -> None:
     known_equip_classes = {r["brick_class"] for r in equip_rules}
 
     for uri in find_unclassified(store):
-        is_equip = uri.startswith("urn:equip:")
-        rules = equip_rules if is_equip else point_rules
-        rules_path = EQUIP_RULES_PATH if is_equip else POINT_RULES_PATH
-        known_classes = known_equip_classes if is_equip else known_point_classes
+        rules, rules_path, known_classes = _rules_for_entity(uri, point_rules, equip_rules, known_point_classes, known_equip_classes)
 
-        result = None
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
-            try:
-                result = mapping.classify_point_with_fallback(store, uri, rules=rules, llm_classify=llm_classify)
-                break
-            except (
-                requests.exceptions.HTTPError,
-                requests.exceptions.ConnectionError,
-                llm_classifier.LLMClassificationError,
-            ) as exc:
-                if attempt == _MAX_ATTEMPTS:
-                    print(f"{uri}: FAILED after {_MAX_ATTEMPTS} attempts ({exc}) - skipping")
-                else:
-                    time.sleep(_RETRY_DELAY_SECONDS)
+        result = _classify_with_retries(store, uri, rules, llm_classify)
         if result is None:
             continue
         outcome, brick_class = result
         print(f"{uri}: {outcome}" + (f" -> {brick_class}" if brick_class else ""))
 
         if propose_rules and outcome == "llm" and brick_class in known_classes:
-            tags = mapping.read_tags(store, uri)
-            if llm_classifier.propose_rule(rules_path, tags, brick_class):
-                print(f"  proposed new rule for {sorted(tags)} -> {brick_class} in {rules_path}")
+            _propose_rule_for_llm_classification(store, uri, brick_class, rules_path)
 
 
 def main() -> None:
