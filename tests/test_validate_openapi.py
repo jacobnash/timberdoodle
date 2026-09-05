@@ -7,13 +7,11 @@ validate_api.py produce responses matching what the spec documents.
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
-import jsonschema
 import pytest
 import requests
 import yaml
+from conftest import assert_matches_schema, load_spec
 from openapi_spec_validator import validate
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
 
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.validate_api import OPENAPI_SPEC_PATH, make_handler
@@ -21,21 +19,11 @@ from timberdoodle.validate_api import OPENAPI_SPEC_PATH, make_handler
 
 @pytest.fixture(scope="module")
 def spec() -> dict:
-    with open(OPENAPI_SPEC_PATH) as f:
-        return yaml.safe_load(f)
+    return load_spec(OPENAPI_SPEC_PATH)
 
 
 def test_spec_is_well_formed_openapi(spec):
     validate(spec)
-
-
-def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
-    resource = Resource.from_contents(spec, default_specification=DRAFT202012)
-    registry = Registry().with_resource(uri="spec", resource=resource)
-    if "$ref" in schema and schema["$ref"].startswith("#"):
-        schema = {"$ref": f"spec{schema['$ref']}"}
-    validator_cls = jsonschema.validators.validator_for(schema)
-    validator_cls(schema, registry=registry).validate(instance)
 
 
 GATEWAY_SECRET = "test-gateway-secret"
@@ -73,7 +61,7 @@ def test_post_validate_matches_documented_schema(live_server, spec):
     resp = requests.post(f"{live_server}/validate", headers={"X-Gateway-Secret": GATEWAY_SECRET})
     assert resp.status_code == 200
     body = resp.json()
-    _assert_matches_schema(
+    assert_matches_schema(
         body,
         spec["paths"]["/validate"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
         spec,

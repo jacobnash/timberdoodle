@@ -13,13 +13,11 @@ import time
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
-import jsonschema
 import pytest
 import requests
 import yaml
+from conftest import assert_matches_schema, load_spec
 from openapi_spec_validator import validate
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
 
 from timberdoodle.auth import ensure_schema
 from timberdoodle.auth_api import OPENAPI_SPEC_PATH, make_handler
@@ -31,8 +29,7 @@ GW_HEADERS = {"X-Gateway-Secret": GATEWAY_SECRET}
 
 @pytest.fixture(scope="module")
 def spec() -> dict:
-    with open(OPENAPI_SPEC_PATH) as f:
-        return yaml.safe_load(f)
+    return load_spec(OPENAPI_SPEC_PATH)
 
 
 def test_spec_is_well_formed_openapi(spec):
@@ -44,15 +41,6 @@ def _lookup(spec: dict, ref: str) -> dict:
     for part in ref.lstrip("#/").split("/"):
         node = node[part]
     return node
-
-
-def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
-    resource = Resource.from_contents(spec, default_specification=DRAFT202012)
-    registry = Registry().with_resource(uri="spec", resource=resource)
-    if "$ref" in schema and schema["$ref"].startswith("#"):
-        schema = {"$ref": f"spec{schema['$ref']}"}
-    validator_cls = jsonschema.validators.validator_for(schema)
-    validator_cls(schema, registry=registry).validate(instance)
 
 
 @pytest.fixture
@@ -131,7 +119,7 @@ def test_full_org_login_me_flow_matches_documented_schemas(live_server, spec):
     assert me_resp.status_code == 200
     me = me_resp.json()
     assert me["sub"] == login_body["user"]["id"]
-    _assert_matches_schema(me, {"$ref": "#/components/schemas/Principal"}, spec)
+    assert_matches_schema(me, {"$ref": "#/components/schemas/Principal"}, spec)
 
     # wrong password -> documented 401
     bad_login = requests.post(f"{live_server}/login", json={"email": "admin@openapi-test.invalid", "password": "wrong"})
@@ -168,7 +156,7 @@ def test_api_key_issue_list_revoke_flow_matches_documented_schemas(live_server, 
     assert list_resp.status_code == 200
     listed = next(k for k in list_resp.json() if k["id"] == key["id"])
     assert "token" not in listed  # never shown again
-    _assert_matches_schema(listed, {"$ref": "#/components/schemas/ApiKey"}, spec)
+    assert_matches_schema(listed, {"$ref": "#/components/schemas/ApiKey"}, spec)
 
     revoke_resp = requests.delete(f"{live_server}/api-keys/{key['id']}", headers=auth_headers)
     assert revoke_resp.status_code == 204

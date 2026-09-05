@@ -10,13 +10,11 @@ import time
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
-import jsonschema
 import pytest
 import requests
 import yaml
+from conftest import assert_matches_schema, load_spec
 from openapi_spec_validator import validate
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
 
 from timberdoodle.ingest_api import OPENAPI_SPEC_PATH, make_handler
 from timberdoodle.remote_store import RemoteStore
@@ -25,8 +23,7 @@ from timberdoodle.timeseries import connect_pool
 
 @pytest.fixture(scope="module")
 def spec() -> dict:
-    with open(OPENAPI_SPEC_PATH) as f:
-        return yaml.safe_load(f)
+    return load_spec(OPENAPI_SPEC_PATH)
 
 
 def test_spec_is_well_formed_openapi(spec):
@@ -64,20 +61,6 @@ def gw(live_server):
 def _schema_for(spec: dict, status: str, path: str = "/ingest", method: str = "post") -> dict:
     response = spec["paths"][path][method]["responses"][status]
     return response["content"]["application/json"]["schema"]
-
-
-def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
-    """Schemas here use $ref (e.g. '#/components/schemas/Error') that only
-    resolves relative to the full spec document - a bare
-    jsonschema.validate(instance, {"$ref": ...}) can't find it on its own,
-    it needs a registry rooted at the whole spec, addressed by a URI the
-    $ref gets resolved against."""
-    resource = Resource.from_contents(spec, default_specification=DRAFT202012)
-    registry = Registry().with_resource(uri="spec", resource=resource)
-    if "$ref" in schema and schema["$ref"].startswith("#"):
-        schema = {"$ref": f"spec{schema['$ref']}"}
-    validator_cls = jsonschema.validators.validator_for(schema)
-    validator_cls(schema, registry=registry).validate(instance)
 
 
 @pytest.mark.integration
@@ -127,7 +110,7 @@ def test_post_ingest_malformed_json_matches_documented_400_schema(gw, live_serve
 
     assert resp.status_code == 400
     body = resp.json()
-    _assert_matches_schema(body, _schema_for(spec, "400"), spec)
+    assert_matches_schema(body, _schema_for(spec, "400"), spec)
     assert "error" in body
 
 
@@ -137,7 +120,7 @@ def test_post_ingest_missing_point_field_matches_documented_400_schema(gw, live_
 
     assert resp.status_code == 400
     body = resp.json()
-    _assert_matches_schema(body, _schema_for(spec, "400"), spec)
+    assert_matches_schema(body, _schema_for(spec, "400"), spec)
 
 
 @pytest.mark.integration
