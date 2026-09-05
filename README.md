@@ -40,6 +40,18 @@ until all 5 HTTP APIs report healthy (`GET /openapi.yaml` on each), so
 compose ps`) leaves you with a stack that's actually ready for the curl
 examples below, not just "containers exist."
 
+**If any `docker compose up -d` recreates a backend container while
+`gateway` itself keeps running from before** (a rebuild, a `git pull`, a
+targeted `--build ingest_api`, or just re-running `up -d` on a stack
+that already had some containers up) — run `docker compose restart
+gateway` afterward. The gateway resolves and caches each backend's
+address at its own nginx startup, not per-request, so it can end up
+routing to a since-recreated container's stale address and return
+404/502 on every route even though every backend reports healthy. This
+isn't limited to the "restart one service on purpose" case — it's
+happened from a plain repeat `docker compose up -d` in this repo's own
+CI/dev loop. `docker compose restart gateway` always fixes it.
+
 | Process | What it does | Port (direct) |
 |---|---|---|
 | `mqtt_listener` | Subscribes to `fbf/#`, writes every reading to Oxigraph + Postgres. | — |
