@@ -29,3 +29,15 @@ See `AUDIT.md` for full methodology, per-finding evidence, and what's explicitly
 | `mapping.py` mutation score | 70.6% (96 survivors) | closed the specific `classify_point` fallback-path gap `mutmut` flagged (Stage 0.3); full re-run not repeated here |
 
 Stage 2.1 (extracting `http_handler_base.py` for the 5 stdlib HTTP APIs) is the largest single contributor to the duplication drop. Full audit-tool re-run (radon/vulture/full mutmut) not repeated here — see `AUDIT.md` for the original methodology if a fresh full pass is wanted later.
+
+## After the follow-up hardening pass (same day)
+
+| Metric | Before this pass | After |
+|---|---|---|
+| `mypy` errors | 9 | **0** (2 documented false positives suppressed with `# type: ignore[index]` + reason; CI flipped from non-blocking to blocking) |
+| `ruff check` (default rule set) | 62 | 3 (all 3 are in files with your own in-flight, uncommitted feature work — not touched; every finding in a committed file is fixed) |
+| Flaky test | `test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_broker` intermittently failed under load | Fixed a real race (wait-for-ingest check only verified one of two points' tags) — 5/5 clean runs in the exact batch that reproduced it |
+| CI guardrails | mypy/ruff both non-blocking, no clone-detection gate, no pre-commit hook | mypy blocking; `jscpd` reporting-only step added; `.pre-commit-config.yaml` added (ruff, optional local install) |
+| `todo/http-handler-base-extraction.md` | didn't exist | written — the design-record note `PLAN.md`'s own Guardrails section called for |
+
+`ruff` stays non-blocking until the 3 remaining findings (all in uncommitted WIP) are resolved — flipping it now would immediately break CI for that work.
