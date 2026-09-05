@@ -124,7 +124,7 @@ def record_webhook_failure(conn: psycopg.Connection, webhook_id: str, error: str
         """,
         (webhook_id, error),
     ).fetchone()
-    failures = row[0]
+    failures = row[0]  # type: ignore[index]  # INSERT...ON CONFLICT DO UPDATE...RETURNING always returns exactly one row; mypy/psycopg's typing can't express that SQL guarantee
     if failures >= disable_threshold:
         conn.execute("UPDATE webhook_health SET disabled = TRUE WHERE webhook_id = %s", (webhook_id,))
         return True

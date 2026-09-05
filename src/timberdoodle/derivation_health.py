@@ -42,7 +42,7 @@ def record_target_failure(conn: psycopg.Connection, derivation_id: str, target_u
         """,
         (derivation_id, target_uri, error),
     ).fetchone()
-    failures = row[0]
+    failures = row[0]  # type: ignore[index]  # INSERT...ON CONFLICT DO UPDATE...RETURNING always returns exactly one row; mypy/psycopg's typing can't express that SQL guarantee
     if failures >= disable_threshold:
         conn.execute(
             "UPDATE derivation_target_health SET disabled = TRUE WHERE derivation_id = %s AND target_uri = %s",
