@@ -139,7 +139,7 @@ def _run_seed_script(email: str, password: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "TIMBERDOODLE_ADMIN_EMAIL": email, "TIMBERDOODLE_ADMIN_PASSWORD": password}
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH), "--skip-structure"],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60,
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60, check=False,
     )
 
 

@@ -64,7 +64,7 @@ window.onload = () => SwaggerUIBundle({{url: "/openapi.yaml", dom_id: "#swagger-
 </script>
 </body>
 </html>
-""".encode("utf-8")
+""".encode()
 
 
 def serve(handler) -> None:

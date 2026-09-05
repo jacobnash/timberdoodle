@@ -14,10 +14,25 @@ import paho.mqtt.client as mqtt
 import pytest
 from rdflib import URIRef
 
-from timberdoodle.derivation_engine import _output_uri, _topological_order, evaluate_derivations
-from timberdoodle.derivation_health import ensure_schema as ensure_health_schema, enable_target, is_target_disabled, record_target_failure
-from timberdoodle.faults import ensure_schema as ensure_fault_schema, open_fault
-from timberdoodle.ingest import link_part_of, link_point_to_equip, topic_prefix_to_equip_uri, topic_to_point_uri
+from timberdoodle.derivation_engine import (
+    _output_uri,
+    _topological_order,
+    evaluate_derivations,
+)
+from timberdoodle.derivation_health import (
+    enable_target,
+    is_target_disabled,
+    record_target_failure,
+)
+from timberdoodle.derivation_health import ensure_schema as ensure_health_schema
+from timberdoodle.faults import ensure_schema as ensure_fault_schema
+from timberdoodle.faults import open_fault
+from timberdoodle.ingest import (
+    link_part_of,
+    link_point_to_equip,
+    topic_prefix_to_equip_uri,
+    topic_to_point_uri,
+)
 from timberdoodle.mapping import classify_point
 from timberdoodle.mqtt_listener import make_on_message
 from timberdoodle.remote_store import RemoteStore
@@ -135,7 +150,7 @@ def test_formula_derivation_returning_none_writes_nothing(ts_conn, fault_conn, h
 def test_dry_run_computes_but_writes_nothing(ts_conn, fault_conn, health_conn):
     store = Store()
     now = datetime.now(timezone.utc)
-    equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/dryrun", 1.0, 3.0, now)
+    _equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/dryrun", 1.0, 3.0, now)
     derivation = _avg_derivation("test-de:dryrun", p1, p2)
 
     trace = evaluate_derivations(store, ts_conn, fault_conn, health_conn, [derivation], now=now, dry_run=True)
@@ -180,7 +195,7 @@ def test_chained_derivations_downstream_reads_upstream_output_same_pass(ts_conn,
 def test_open_fault_excludes_input_from_evaluation(ts_conn, fault_conn, health_conn):
     store = Store()
     now = datetime.now(timezone.utc)
-    equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/faulty", 70.0, 74.0, now)
+    _equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/faulty", 70.0, 74.0, now)
     open_fault(fault_conn, "test-de:stale-rule", str(p1), now)
 
     derivation = _avg_derivation("test-de:fault-filtered", p1, p2, fn_source="def run(inputs, row):\n    return None if not inputs['a'] else 1.0")
@@ -194,8 +209,8 @@ def test_open_fault_excludes_input_from_evaluation(ts_conn, fault_conn, health_c
 def test_uncaught_exception_disables_only_that_target(ts_conn, fault_conn, health_conn):
     store = Store()
     now = datetime.now(timezone.utc)
-    equip_bad, pb1, pb2 = _seed_two_points(store, ts_conn, "test-de/bad", 0.0, 5.0, now)
-    equip_good, pg1, pg2 = _seed_two_points(store, ts_conn, "test-de/good", 10.0, 20.0, now)
+    equip_bad, _pb1, _pb2 = _seed_two_points(store, ts_conn, "test-de/bad", 0.0, 5.0, now)
+    equip_good, _pg1, _pg2 = _seed_two_points(store, ts_conn, "test-de/good", 10.0, 20.0, now)
 
     derivation = {
         "id": "test-de:divider",

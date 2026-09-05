@@ -22,8 +22,8 @@ A plain daemon=True thread doesn't have that problem.
 import ast
 import builtins
 import threading
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 
 class SandboxError(Exception):
@@ -70,7 +70,7 @@ def compile_fn(source: str) -> Callable:
 
     namespace = {"__builtins__": SAFE_BUILTINS}
     try:
-        exec(compile(tree, "<derivation fn_source>", "exec"), namespace)
+        exec(compile(tree, "<derivation fn_source>", "exec"), namespace)  # noqa: S102 - this whole module exists to run arbitrary fn_source safely; _validate_ast already ran, see module docstring
     except SandboxError:
         raise
     except Exception as exc:

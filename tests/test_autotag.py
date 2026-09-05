@@ -40,7 +40,7 @@ class _FakeResult:
 @pytest.fixture
 def store():
     s = RemoteStore()
-    s._update(f'DELETE {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o . FILTER(STRSTARTS(STR(?s), "urn:point:test-autotag")) }}')
+    s._update('DELETE { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(STRSTARTS(STR(?s), "urn:point:test-autotag")) }')
     return s
 
 

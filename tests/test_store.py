@@ -1,6 +1,6 @@
 from rdflib import RDF, Namespace
 
-from timberdoodle.store import BRICK, PROV, Store
+from timberdoodle.store import BRICK, Store
 
 BLDG = Namespace("urn:mybuilding#")
 

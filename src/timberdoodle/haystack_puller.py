@@ -23,7 +23,11 @@ from datetime import datetime, timezone
 
 from timberdoodle import mapping, tracing
 from timberdoodle.haystack_client import HaystackClient
-from timberdoodle.haystack_pull_state import ensure_schema, get_checkpoint, set_checkpoint
+from timberdoodle.haystack_pull_state import (
+    ensure_schema,
+    get_checkpoint,
+    set_checkpoint,
+)
 from timberdoodle.ingest import (
     ingest_haystack_equip_tags,
     ingest_reading,

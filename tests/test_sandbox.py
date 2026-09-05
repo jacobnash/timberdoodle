@@ -7,7 +7,12 @@ Postgres/Oxigraph needed - pure in-process logic.
 
 import pytest
 
-from timberdoodle.sandbox import SandboxError, compile_fn, run_test_cases, run_with_timeout
+from timberdoodle.sandbox import (
+    SandboxError,
+    compile_fn,
+    run_test_cases,
+    run_with_timeout,
+)
 
 
 def test_compile_fn_runs_a_legit_function():

@@ -18,13 +18,17 @@ import os
 import pytest
 
 from timberdoodle.fake_haystack_server import (
-    TEST_ITERATIONS,
     TEST_PASSWORD,
-    TEST_SALT,
     TEST_USER,
+)
+from timberdoodle.fake_haystack_server import (
     make_fake_haxall_server as _make_fake_haxall_server,
 )
-from timberdoodle.haystack_client import HaystackAuthError, HaystackClient, _decode_haystack_scalar
+from timberdoodle.haystack_client import (
+    HaystackAuthError,
+    HaystackClient,
+    _decode_haystack_scalar,
+)
 
 
 def test_decode_haystack_scalar_marker():

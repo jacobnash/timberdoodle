@@ -35,10 +35,10 @@ def test_load_brick_and_query_feeds(store):
     store.add_entity(BLDG.ahu_1, BRICK.AHU)
     store.add_relationship(BLDG.chiller_1, BRICK.feeds, BLDG.ahu_1)
 
-    rows = store.query(f"""
+    rows = store.query("""
         PREFIX brick: <https://brickschema.org/schema/Brick#>
         PREFIX bldg: <urn:test-remote-store#>
-        SELECT ?fed WHERE {{ bldg:chiller_1 brick:feeds ?fed }}
+        SELECT ?fed WHERE { bldg:chiller_1 brick:feeds ?fed }
     """)
     assert len(rows) == 1
     assert rows[0].fed == str(BLDG.ahu_1)
@@ -52,10 +52,10 @@ def test_remove_relationship_deletes_exactly_that_triple(store):
 
     store.remove_relationship(BLDG.ahu_2, BRICK.feeds, BLDG.vav_1)
 
-    rows = {r.fed for r in store.query(f"""
+    rows = {r.fed for r in store.query("""
         PREFIX brick: <https://brickschema.org/schema/Brick#>
         PREFIX bldg: <urn:test-remote-store#>
-        SELECT ?fed WHERE {{ bldg:ahu_2 brick:feeds ?fed }}
+        SELECT ?fed WHERE { bldg:ahu_2 brick:feeds ?fed }
     """)}
     assert rows == {str(BLDG.vav_2)}
 

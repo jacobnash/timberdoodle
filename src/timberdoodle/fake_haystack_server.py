@@ -22,7 +22,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from timberdoodle.haystack_client import _b64url_decode, _b64url_nopad, _parse_auth_params
+from timberdoodle.haystack_client import (
+    _b64url_decode,
+    _b64url_nopad,
+    _parse_auth_params,
+)
 
 TEST_USER = "tduser"
 TEST_PASSWORD = "tdpass"

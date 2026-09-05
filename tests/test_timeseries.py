@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from timberdoodle.timeseries import connect, delete_point_value, read_latest, read_range, write_point_value
+from timberdoodle.timeseries import (
+    connect,
+    delete_point_value,
+    read_latest,
+    read_range,
+    write_point_value,
+)
 
 
 @pytest.fixture

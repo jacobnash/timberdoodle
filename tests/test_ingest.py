@@ -7,7 +7,6 @@ directly (per the plan's "wire contract, not a class hierarchy" principle).
 
 import json
 import time
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import paho.mqtt.client as mqtt

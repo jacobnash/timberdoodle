@@ -188,10 +188,10 @@ def test_pull_once_against_a_real_running_haxall_instance(ts_conn):
 
     pull_once(client, store, ts_conn, "e2e-haxall", "point", "equip", backfill_days=1.0)
 
-    rows = list(store.query(f"""
-        SELECT ?point ?type WHERE {{
+    rows = list(store.query("""
+        SELECT ?point ?type WHERE {
             ?point a ?type .
             FILTER(STRSTARTS(STR(?point), "urn:point:haystack/e2e-haxall/"))
-        }}
+        }
     """))
     assert len(rows) > 0, "expected at least one pulled point to have landed with a type in the store"

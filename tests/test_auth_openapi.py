@@ -9,7 +9,6 @@ known secret and sends the header itself, since there's no real gateway
 container in front of this in-process server to set it automatically.
 """
 
-import time
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
@@ -143,7 +142,7 @@ def test_api_key_issue_list_revoke_flow_matches_documented_schemas(live_server, 
         f"{live_server}/orgs",
         json={"name": "OpenAPI Test Org Keys", "admin_email": "admin2@openapi-test.invalid", "admin_password": "pw-123456"},
     )
-    org = org_resp.json()
+    org_resp.json()
     login = requests.post(f"{live_server}/login", json={"email": "admin2@openapi-test.invalid", "password": "pw-123456"}).json()
     auth_headers = {**GW_HEADERS, "Authorization": f"Bearer {login['token']}"}
 
@@ -171,7 +170,7 @@ def test_api_key_issue_list_revoke_flow_matches_documented_schemas(live_server, 
 
 @pytest.mark.integration
 def test_logout_is_idempotent(live_server):
-    org_resp = requests.post(
+    requests.post(
         f"{live_server}/orgs",
         json={"name": "OpenAPI Test Org Logout", "admin_email": "admin3@openapi-test.invalid", "admin_password": "pw-123456"},
     )
