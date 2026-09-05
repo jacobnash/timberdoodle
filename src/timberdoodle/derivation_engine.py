@@ -138,7 +138,7 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict,
                     inputs[name] = _read_input_series(ts_conn, fault_conn, point_uri, now - timedelta(seconds=window), now)
                 row_extra = {name: str(getattr(row, name)) for name in extra_vars}
                 value = sandbox.run_with_timeout(fn, inputs, row_extra)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one target's sandboxed formula failing must not stop evaluation of every other target
                 span.set_attribute("error", str(exc))
                 if health_conn is not None and not dry_run:
                     derivation_health.record_target_failure(health_conn, derivation_id, target_uri, str(exc))
@@ -207,7 +207,7 @@ def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict,
                         child_series.append([(now, values[child])])
                         child_uris.append(_output_uri(derivation_id, child))
                 value = sandbox.run_with_timeout(fn, child_series, {"node": node})
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one node's sandboxed rollup failing must not stop evaluation of every other node
                 span.set_attribute("error", str(exc))
                 if health_conn is not None and not dry_run:
                     derivation_health.record_target_failure(health_conn, derivation_id, node, str(exc))
@@ -268,7 +268,7 @@ def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: l
             try:
                 rows = _evaluate_rollup(store, ts_conn, fault_conn, health_conn, derivation, now, dry_run) if kind == "rollup" \
                     else _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation, now, dry_run)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one derivation failing (bad SPARQL, sandboxed code) must not stop the whole sweep
                 span.set_attribute("error", str(exc))
                 continue
             span.set_attribute("target_count", len(rows))
@@ -295,7 +295,7 @@ def make_on_message(store, ts_conn, fault_conn, health_conn, cache: json_store.R
                 span.set_attribute("topic", topic)
                 try:
                     _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation, datetime.now(timezone.utc), dry_run=False, trigger_point_uri=point_uri)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - one MQTT-triggered derivation failing must not crash the listener callback
                     span.set_attribute("error", str(exc))
 
     return on_message

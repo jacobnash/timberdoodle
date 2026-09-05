@@ -53,7 +53,7 @@ class SparqlRow:
 
 
 class RemoteStore:
-    def __init__(self, base_url: str = None):
+    def __init__(self, base_url: str | None = None):
         self.base_url = (base_url or os.environ.get("OXIGRAPH_URL", "http://localhost:7878")).rstrip("/")
         # A bare requests.post() opens a fresh TCP connection every call -
         # a Session reuses one via HTTP keep-alive, cutting handshake cost

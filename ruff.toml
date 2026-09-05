@@ -1,7 +1,9 @@
 target-version = "py310"
 
-# Intentionally no [lint] select override yet - this pins ruff's own
-# default rule set (E4, E7, E9, F, I as of ruff 0.16) as the baseline
-# recorded in BASELINE.md (63 findings). See PLAN.md Stage 1.4 for the
-# next rules to add (BLE001, RUF013) and Stage 3.3 for the broader
-# --select ALL adoption decision.
+# Ruff's own default rule set (E4, E7, E9, F, I as of ruff 0.16) is the
+# baseline recorded in BASELINE.md (63 findings) - PLAN.md Stage 1.4
+# adds BLE001 (blind except Exception) and RUF013 (implicit Optional)
+# on top of it, both already fixed/noqa'd repo-wide. See PLAN.md
+# Stage 3.3 for the broader --select ALL adoption decision.
+[lint]
+extend-select = ["BLE001", "RUF013"]

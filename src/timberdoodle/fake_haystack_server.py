@@ -30,23 +30,23 @@ TEST_SALT = b"fixed-test-salt-"
 TEST_ITERATIONS = 4096
 
 
-def make_fake_haxall_server(canned_grids: dict = None):
-    canned_grids = canned_grids or {}
+def make_fake_haxall_server(canned_grids: dict | None = None):
+    grids: dict = canned_grids or {}
     handshakes = {}
-    bearer_tokens = set()
+    bearer_tokens: set[str] = set()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
 
         def _grid_for(self, op: str) -> dict:
-            """canned_grids[op] is either a flat {"rows": [...]} grid (same
+            """grids[op] is either a flat {"rows": [...]} grid (same
             response regardless of query params - what every op besides
             read/hisRead needs), or - only for "read"/"hisRead" - a dict
             keyed by the request's filter/id query param, so a caller can
             hand back different rows for an equip read vs a point read, or
             different history per point id."""
-            grid = canned_grids.get(op, {"rows": []})
+            grid = grids.get(op, {"rows": []})
             if "rows" in grid or op not in ("read", "hisRead"):
                 return grid
             params = parse_qs(urlsplit(self.path).query)

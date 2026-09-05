@@ -96,7 +96,7 @@ def run_with_timeout(fn: Callable, *args, timeout_seconds: float = 5, **kwargs):
     def _target():
         try:
             outcome["value"] = fn(*args, **kwargs)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - fn is arbitrary sandboxed user code; any exception type must be captured and reported back to the caller, not just a predictable subset
             outcome["error"] = exc
 
     thread = threading.Thread(target=_target, daemon=True)
