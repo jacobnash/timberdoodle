@@ -124,12 +124,19 @@ class _WebhookRequired(TypedDict):
     id: str
 
 
-class Webhook(CreateWebhookRequest, _WebhookRequired, total=False):
-    """A persisted webhook (webhooks.json) as returned by GET /webhooks -
-    disabled/consecutive_failures/last_error are joined in from
-    faults.list_webhook_health at read time, not stored alongside the
-    webhook itself; absent on the POST /webhooks creation response."""
+class WebhookHealth(TypedDict, total=False):
+    """faults.list_webhook_health's per-webhook value - joined into a
+    Webhook at GET /webhooks read time, not stored alongside the webhook
+    itself (see faults.py's own module docstring on why webhook_health
+    is a separate table from webhooks.json). A webhook with no row here
+    is treated as not-disabled/0-failures, never as this shape absent."""
 
     disabled: bool
     consecutive_failures: int
     last_error: str | None
+
+
+class Webhook(CreateWebhookRequest, _WebhookRequired, WebhookHealth):
+    """A persisted webhook (webhooks.json) as returned by GET /webhooks -
+    the WebhookHealth fields are absent on the POST /webhooks creation
+    response (nothing to join yet)."""
