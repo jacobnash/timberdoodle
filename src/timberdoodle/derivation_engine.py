@@ -109,6 +109,49 @@ def _write_and_attach(store, ts_conn, output_uri: str, target_uri: str, value, n
         span.set_attribute("derived_from", input_uris)
 
 
+def _record_target_failure(health_conn, derivation_id: str, target_uri: str, dry_run: bool, exc: Exception, span) -> TraceEntry:
+    """Shared by _evaluate_formula's and _walk_rollup_tree's per-target
+    except clauses - only the exception-raising computation itself
+    differs between formula and rollup, everything after "it failed" is
+    identical bookkeeping."""
+    span.set_attribute("error", str(exc))
+    if health_conn is not None and not dry_run:
+        derivation_health.record_target_failure(health_conn, derivation_id, target_uri, str(exc))
+    return {"target": target_uri, "error": str(exc)}
+
+
+def _record_and_trace_success(
+    store, ts_conn, health_conn, derivation_id: str, target_uri: str, output_cfg: dict,
+    now: datetime, dry_run: bool, value, derived_from: list[str], span,
+) -> TraceEntry:
+    """Shared by _evaluate_formula's and _walk_rollup_tree's post-compute
+    handling: record the health outcome, build the matching trace entry,
+    and write+attach the result if it's not None and dry_run is False."""
+    if health_conn is not None and not dry_run:
+        derivation_health.record_target_success(health_conn, derivation_id, target_uri)
+
+    span.set_attribute("computed_value", "" if value is None else str(value))
+    if value is None:
+        return {"target": target_uri, "computed_value": None}
+
+    output_uri = _output_uri(derivation_id, target_uri)
+    if not dry_run:
+        _write_and_attach(store, ts_conn, output_uri, target_uri, value, now, output_cfg, derived_from, span=span)
+    return {
+        "target": target_uri, "computed_value": value,
+        "would_write_uri": output_uri, "would_attach_to": target_uri,
+        "would_derive_from": derived_from,
+    }
+
+
+def _read_formula_inputs(ts_conn, fault_conn, input_uris: dict[str, str], input_windows: dict, window_seconds: float, now: datetime) -> dict[str, list[tuple]]:
+    inputs = {}
+    for name, point_uri in input_uris.items():
+        window = input_windows.get(name, window_seconds)
+        inputs[name] = _read_input_series(ts_conn, fault_conn, point_uri, now - timedelta(seconds=window), now)
+    return inputs
+
+
 def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: Derivation, now: datetime, dry_run: bool, trigger_point_uri: str | None = None) -> list[TraceEntry]:
     fn = sandbox.compile_fn(derivation["fn_source"])
     derivation_id = derivation["id"]
@@ -134,37 +177,37 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: Deriv
             span.set_attribute("derivation_id", derivation_id)
             span.set_attribute("target", target_uri)
             try:
-                inputs = {}
-                for name, point_uri in input_uris.items():
-                    window = input_windows.get(name, window_seconds)
-                    inputs[name] = _read_input_series(ts_conn, fault_conn, point_uri, now - timedelta(seconds=window), now)
+                inputs = _read_formula_inputs(ts_conn, fault_conn, input_uris, input_windows, window_seconds, now)
                 row_extra = {name: str(getattr(row, name)) for name in extra_vars}
                 value = sandbox.run_with_timeout(fn, inputs, row_extra)
             except Exception as exc:  # noqa: BLE001 - one target's sandboxed formula failing must not stop evaluation of every other target
-                span.set_attribute("error", str(exc))
-                if health_conn is not None and not dry_run:
-                    derivation_health.record_target_failure(health_conn, derivation_id, target_uri, str(exc))
-                trace.append({"target": target_uri, "error": str(exc)})
+                trace.append(_record_target_failure(health_conn, derivation_id, target_uri, dry_run, exc, span))
                 continue
 
-            if health_conn is not None and not dry_run:
-                derivation_health.record_target_success(health_conn, derivation_id, target_uri)
-
-            span.set_attribute("computed_value", "" if value is None else str(value))
-            if value is None:
-                trace.append({"target": target_uri, "computed_value": None})
-                continue
-
-            output_uri = _output_uri(derivation_id, target_uri)
-            trace.append({
-                "target": target_uri, "computed_value": value,
-                "would_write_uri": output_uri, "would_attach_to": target_uri,
-                "would_derive_from": list(input_uris.values()),
-            })
-            if not dry_run:
-                _write_and_attach(store, ts_conn, output_uri, target_uri, value, now, output_cfg, list(input_uris.values()), span=span)
+            trace.append(_record_and_trace_success(
+                store, ts_conn, health_conn, derivation_id, target_uri, output_cfg,
+                now, dry_run, value, list(input_uris.values()), span,
+            ))
 
     return trace
+
+
+def _rollup_node_inputs(
+    store, ts_conn, fault_conn, derivation_id: str, node: str, leaf_class: str,
+    edges: dict[str, list[str]], values: dict[str, object], window_start: datetime, now: datetime,
+) -> tuple[list, list[str]]:
+    """A node's own directly-attached leaf points, plus each already-
+    evaluated child's own computed value folded in as a synthetic
+    one-point series - see _walk_rollup_tree's module docstring on why
+    a rollup node needs both."""
+    leaf_uris = [str(r.p) for r in store.query(f"{_PREFIXES}SELECT ?p WHERE {{ <{node}> brick:hasPoint ?p . ?p a {leaf_class} }}")]
+    child_series = [_read_input_series(ts_conn, fault_conn, p, window_start, now) for p in leaf_uris]
+    child_uris = list(leaf_uris)
+    for child in edges.get(node, []):
+        if values.get(child) is not None:
+            child_series.append([(now, values[child])])
+            child_uris.append(_output_uri(derivation_id, child))
+    return child_series, child_uris
 
 
 def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: Derivation, root: str, now: datetime, dry_run: bool) -> list[TraceEntry]:
@@ -201,39 +244,18 @@ def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: Deriv
             span.set_attribute("derivation_id", derivation_id)
             span.set_attribute("target", node)
             try:
-                leaf_uris = [str(r.p) for r in store.query(f"{_PREFIXES}SELECT ?p WHERE {{ <{node}> brick:hasPoint ?p . ?p a {leaf_class} }}")]
-                child_series = [_read_input_series(ts_conn, fault_conn, p, window_start, now) for p in leaf_uris]
-                child_uris = list(leaf_uris)
-                for child in edges.get(node, []):
-                    if values.get(child) is not None:
-                        child_series.append([(now, values[child])])
-                        child_uris.append(_output_uri(derivation_id, child))
+                child_series, child_uris = _rollup_node_inputs(store, ts_conn, fault_conn, derivation_id, node, leaf_class, edges, values, window_start, now)
                 value = sandbox.run_with_timeout(fn, child_series, {"node": node})
             except Exception as exc:  # noqa: BLE001 - one node's sandboxed rollup failing must not stop evaluation of every other node
-                span.set_attribute("error", str(exc))
-                if health_conn is not None and not dry_run:
-                    derivation_health.record_target_failure(health_conn, derivation_id, node, str(exc))
-                trace.append({"target": node, "error": str(exc)})
+                trace.append(_record_target_failure(health_conn, derivation_id, node, dry_run, exc, span))
                 values[node] = None
                 continue
 
-            if health_conn is not None and not dry_run:
-                derivation_health.record_target_success(health_conn, derivation_id, node)
-
             values[node] = value
-            span.set_attribute("computed_value", "" if value is None else str(value))
-            if value is None:
-                trace.append({"target": node, "computed_value": None})
-                continue
-
-            output_uri = _output_uri(derivation_id, node)
-            trace.append({
-                "target": node, "computed_value": value,
-                "would_write_uri": output_uri, "would_attach_to": node,
-                "would_derive_from": child_uris,
-            })
-            if not dry_run:
-                _write_and_attach(store, ts_conn, output_uri, node, value, now, output_cfg, child_uris, span=span)
+            trace.append(_record_and_trace_success(
+                store, ts_conn, health_conn, derivation_id, node, output_cfg,
+                now, dry_run, value, child_uris, span,
+            ))
 
     return trace
 
