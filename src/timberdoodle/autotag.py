@@ -75,7 +75,11 @@ def run(store, llm_classify=None, propose_rules: bool = True) -> None:
             try:
                 result = mapping.classify_point_with_fallback(store, uri, rules=rules, llm_classify=llm_classify)
                 break
-            except (requests.exceptions.HTTPError, requests.exceptions.ConnectionError) as exc:
+            except (
+                requests.exceptions.HTTPError,
+                requests.exceptions.ConnectionError,
+                llm_classifier.LLMClassificationError,
+            ) as exc:
                 if attempt == _MAX_ATTEMPTS:
                     print(f"{uri}: FAILED after {_MAX_ATTEMPTS} attempts ({exc}) - skipping")
                 else:

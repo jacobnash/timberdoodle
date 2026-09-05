@@ -106,6 +106,25 @@ def test_run_skips_point_after_max_retries_on_connection_error(monkeypatch):
     assert len(calls) == autotag._MAX_ATTEMPTS
 
 
+def test_run_skips_point_after_max_retries_on_unparseable_llm_response(monkeypatch):
+    """LLMClassificationError (AUDIT.md Theme D) is retried and skipped the
+    same as a network error, not left to crash the whole sweep."""
+    monkeypatch.setattr(autotag, "find_unclassified", lambda store: [URIRef("urn:point:test-retry-2")])
+
+    calls = []
+
+    def unparseable_classify(store, uri, rules, llm_classify):
+        calls.append(uri)
+        raise llm_classifier.LLMClassificationError("model returned no parsed output")
+
+    monkeypatch.setattr(mapping, "classify_point_with_fallback", unparseable_classify)
+    monkeypatch.setattr(autotag, "_RETRY_DELAY_SECONDS", 0)
+
+    run(store=object(), llm_classify=None, propose_rules=False)  # must not raise
+
+    assert len(calls) == autotag._MAX_ATTEMPTS
+
+
 def test_run_proposes_rule_when_llm_outcome_matches_a_known_class(monkeypatch):
     point_uri = URIRef("urn:point:test-propose-1")
     monkeypatch.setattr(autotag, "find_unclassified", lambda store: [point_uri])
