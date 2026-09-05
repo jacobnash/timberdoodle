@@ -25,6 +25,8 @@ import threading
 from collections.abc import Callable
 from datetime import datetime
 
+from timberdoodle.schemas import TestCaseResult
+
 
 class SandboxError(Exception):
     pass
@@ -127,12 +129,12 @@ def _parse_test_inputs(inputs):
     return [_parse_series(series) for series in inputs]
 
 
-def run_test_cases(fn: Callable, test_cases: list[dict]) -> list[dict]:
+def run_test_cases(fn: Callable, test_cases: list[dict]) -> list[TestCaseResult]:
     """Runs every declared test case through fn under the same timeout as
     live evaluation. Never raises - a case that errors is reported as a
     failure, not an exception, so callers can present every case's outcome
     at once instead of stopping at the first one."""
-    results = []
+    results: list[TestCaseResult] = []
     for case in test_cases:
         expected = case["expected"]
         try:

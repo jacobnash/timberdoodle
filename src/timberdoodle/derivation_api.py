@@ -19,6 +19,7 @@ import re
 import threading
 from functools import partial
 from http.server import ThreadingHTTPServer
+from typing import cast
 from urllib.parse import unquote
 
 from timberdoodle import (
@@ -32,6 +33,7 @@ from timberdoodle import (
 )
 from timberdoodle.http_handler_base import BaseAPIHandler, respond_json
 from timberdoodle.remote_store import RemoteStore
+from timberdoodle.schemas import Derivation
 from timberdoodle.timeseries import connect_pool
 
 tracer = tracing.get_tracer(__name__)
@@ -132,7 +134,7 @@ def make_handler(derivations_path: str, store, ts_pool):
             _validate_fn_and_test_cases(fn_source, test_cases)
 
             reserved = {"name", "kind", "fn_source", "test_cases", "window_seconds", "output", "depends_on"}
-            derivation = {
+            derivation: Derivation = {
                 "id": json_store.new_id(),
                 "name": body["name"],
                 "kind": body.get("kind", "formula"),
@@ -144,7 +146,7 @@ def make_handler(derivations_path: str, store, ts_pool):
                 **{k: v for k, v in body.items() if k not in reserved},
             }
             with _file_lock:
-                derivations = json_store.load(derivations_path)
+                derivations = cast(list[Derivation], json_store.load(derivations_path))
                 derivations.append(derivation)
                 json_store.save(derivations_path, derivations)
             span.set_attribute("derivation_id", derivation["id"])
@@ -159,13 +161,19 @@ def make_handler(derivations_path: str, store, ts_pool):
 
         def _dry_run(self, span) -> None:
             body = self.read_json_body()
+            derivation: Derivation
             if "id" in body and set(body.keys()) <= {"id"}:
-                derivations = json_store.load(derivations_path)
-                derivation = next((d for d in derivations if d["id"] == body["id"]), None)
-                if derivation is None:
+                derivations = cast(list[Derivation], json_store.load(derivations_path))
+                found_derivation = next((d for d in derivations if d["id"] == body["id"]), None)
+                if found_derivation is None:
                     raise ValueError(f"no derivation with id {body['id']!r}")
+                derivation = found_derivation
             else:
-                derivation = {**body, "id": body.get("id", "draft")}
+                # A draft dry-run body may omit fields a persisted Derivation
+                # requires (e.g. name) - dry-run only reads what the engine
+                # actually needs (fn_source, select/root_select, etc.), so
+                # this is a deliberately lenient cast, not a real guarantee.
+                derivation = cast(Derivation, {**body, "id": body.get("id", "draft")})
                 sandbox.compile_fn(derivation["fn_source"])  # fail fast with a clear 400 instead of a silently-skipped trace
 
             span.set_attribute("derivation_id", derivation["id"])
@@ -184,13 +192,17 @@ def make_handler(derivations_path: str, store, ts_pool):
             span.set_attribute("derivation_id", derivation_id)
             span.set_attribute("target", target_uri)
             with ts_pool.connection() as conn:
-                derivation_health.enable_target(conn, derivation_id, target_uri)
-            _respond_json(self, 200, {"derivation_id": derivation_id, "target_uri": target_uri, "disabled": False})
+                target = derivation_health.enable_target(conn, derivation_id, target_uri)
+            if target is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            _respond_json(self, 200, target)
 
         def _delete(self, derivation_id: str, span) -> None:
             span.set_attribute("id", derivation_id)
             with _file_lock:
-                derivations = json_store.load(derivations_path)
+                derivations = cast(list[Derivation], json_store.load(derivations_path))
                 remaining = [d for d in derivations if d["id"] != derivation_id]
                 found = len(remaining) != len(derivations)
                 if found:

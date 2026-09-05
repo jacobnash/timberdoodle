@@ -31,6 +31,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import paho.mqtt.client as mqtt
 from rdflib import URIRef
@@ -39,6 +40,7 @@ from timberdoodle import derivation_health, json_store, sandbox, timeseries, tra
 from timberdoodle.faults import list_faults
 from timberdoodle.ingest import link_point_to_equip, topic_to_point_uri
 from timberdoodle.remote_store import RemoteStore
+from timberdoodle.schemas import Derivation, TraceEntry
 from timberdoodle.store import BRICK, TD
 
 tracer = tracing.get_tracer(__name__)
@@ -107,7 +109,7 @@ def _write_and_attach(store, ts_conn, output_uri: str, target_uri: str, value, n
         span.set_attribute("derived_from", input_uris)
 
 
-def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict, now: datetime, dry_run: bool, trigger_point_uri: str | None = None) -> list[dict]:
+def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: Derivation, now: datetime, dry_run: bool, trigger_point_uri: str | None = None) -> list[TraceEntry]:
     fn = sandbox.compile_fn(derivation["fn_source"])
     derivation_id = derivation["id"]
     target_var = derivation["target_var"]
@@ -117,7 +119,7 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict,
     input_windows = derivation.get("input_windows") or {}
     output_cfg = derivation.get("output", {})
 
-    trace: list[dict] = []
+    trace: list[TraceEntry] = []
     rows = list(store.query(derivation["select"]))
     for row in rows:
         target_uri = str(getattr(row, target_var))
@@ -165,7 +167,7 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict,
     return trace
 
 
-def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict, root: str, now: datetime, dry_run: bool) -> list[dict]:
+def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: Derivation, root: str, now: datetime, dry_run: bool) -> list[TraceEntry]:
     derivation_id = derivation["id"]
     part_rel = derivation["part_relationship"]
     leaf_class = derivation["leaf_point_class"]
@@ -187,7 +189,7 @@ def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict,
 
     order = _topological_order(edges)  # children before parents
 
-    trace: list[dict] = []
+    trace: list[TraceEntry] = []
     values: dict[str, object] = {}
     window_start = now - timedelta(seconds=window_seconds)
 
@@ -236,15 +238,15 @@ def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict,
     return trace
 
 
-def _evaluate_rollup(store, ts_conn, fault_conn, health_conn, derivation: dict, now: datetime, dry_run: bool) -> list[dict]:
+def _evaluate_rollup(store, ts_conn, fault_conn, health_conn, derivation: Derivation, now: datetime, dry_run: bool) -> list[TraceEntry]:
     roots = [str(row.root) for row in store.query(derivation["root_select"])]
-    trace = []
+    trace: list[TraceEntry] = []
     for root in roots:
         trace.extend(_walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation, root, now, dry_run))
     return trace
 
 
-def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: list[dict], now: datetime | None = None, dry_run: bool = False, only_ids: set[str] | None = None) -> list[dict]:
+def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: list[Derivation], now: datetime | None = None, dry_run: bool = False, only_ids: set[str] | None = None) -> list[TraceEntry]:
     """Importable/synchronous - tests and --dry-run both call this
     directly. `only_ids`, when given, evaluates only those derivations
     (for per-derivation interval_seconds scheduling) while still ordering
@@ -258,7 +260,7 @@ def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: l
     if only_ids is not None:
         order = [did for did in order if did in only_ids]
 
-    trace: list[dict] = []
+    trace: list[TraceEntry] = []
     for derivation_id in order:
         derivation = by_id[derivation_id]
         with tracer.start_as_current_span("derivation_engine.evaluate") as span:
@@ -286,7 +288,7 @@ def make_on_message(store, ts_conn, fault_conn, health_conn, cache: json_store.R
     def on_message(client, userdata, msg):
         topic = msg.topic
         point_uri = str(topic_to_point_uri(topic))
-        for derivation in cache.get():
+        for derivation in cast(list[Derivation], cache.get()):
             glob = derivation.get("applies_to_topic_glob")
             if not glob or derivation.get("kind") == "rollup" or not fnmatch.fnmatch(topic, glob):
                 continue
@@ -324,7 +326,7 @@ def main() -> None:
     cache = json_store.RuleCache(args.derivations_file)
 
     if args.dry_run:
-        derivations = cache.get()
+        derivations = cast(list[Derivation], cache.get())
         if args.derivation_id:
             derivations = [d for d in derivations if d["id"] == args.derivation_id]
         for entry in evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations, dry_run=True):
@@ -342,7 +344,7 @@ def main() -> None:
     try:
         while True:
             now = datetime.now(timezone.utc)
-            derivations = cache.get()
+            derivations = cast(list[Derivation], cache.get())
             due_ids = {d["id"] for d in derivations if now >= next_run.get(d["id"], now)}
             if due_ids:
                 evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations, now=now, dry_run=False, only_ids=due_ids)

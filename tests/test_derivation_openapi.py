@@ -162,9 +162,27 @@ def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(
     assert targets_resp.status_code == 200
     assert targets_resp.json() == []  # dry-run doesn't touch target health either
 
+    # Enabling a target with no recorded health row (never failed or
+    # succeeded - dry-run doesn't touch target health, per above) 404s -
+    # there's nothing to enable. Seed a real row the way a genuine
+    # non-dry-run evaluation would (record_target_failure) to exercise
+    # the actual documented 200/TargetHealth response.
+    enable_missing_resp = gw.post(f"{live_server}/derivations/{derivation['id']}/targets/{quote(str(equip), safe='')}/enable")
+    assert enable_missing_resp.status_code == 404
+
+    with ts_pool.connection() as conn:
+        derivation_health.record_target_failure(conn, derivation["id"], str(equip), "seeded failure")
+
     enable_resp = gw.post(f"{live_server}/derivations/{derivation['id']}/targets/{quote(str(equip), safe='')}/enable")
     assert enable_resp.status_code == 200
-    assert enable_resp.json()["disabled"] is False
+    enabled = enable_resp.json()
+    assert enabled["disabled"] is False
+    assert enabled["consecutive_failures"] == 0
+    assert_matches_schema(
+        enabled,
+        spec["paths"]["/derivations/{id}/targets/{target}/enable"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
+        spec,
+    )
 
     delete_resp = gw.delete(f"{live_server}/derivations/{derivation['id']}")
     assert delete_resp.status_code == 204
