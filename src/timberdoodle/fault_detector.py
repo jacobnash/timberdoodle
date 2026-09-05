@@ -59,7 +59,7 @@ class RuleCache:
     def __init__(self, path: str, store=None):
         self.path = path
         self.store = store
-        self._mtime = None
+        self._mtime: float | None = None
         self._rules: list[dict] = []
         self._brick_roster: dict[str, set[str]] = {}
 

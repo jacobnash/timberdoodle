@@ -367,18 +367,27 @@ def test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_bro
     publisher.publish(f"{modbus_topic}/tags", json.dumps({"value": json.dumps(zone_temp_tags), "ts": now_ts}), retain=True)
     publisher.disconnect()
 
-    def _both_ingested():
+    def _is_tagged(point_uri) -> bool:
         # RemoteStore.query() only exposes SELECT-shaped row iteration (no
         # ASK support, see ingest.link_equip_ref's own note on this) - a
         # SELECT ... LIMIT 1 existence check does the same job.
         tagged = store.query(f"""
             PREFIX haystack: <urn:timberdoodle:haystack#>
-            SELECT ?tag WHERE {{ <{bacnet_point}> haystack:hasTag ?tag }} LIMIT 1
+            SELECT ?tag WHERE {{ <{point_uri}> haystack:hasTag ?tag }} LIMIT 1
         """)
+        return len(list(tagged)) > 0
+
+    def _both_ingested():
+        # Both points' *and* both points' tags - a flaky-under-load
+        # regression found this only checked bacnet_point's tags, so the
+        # wait loop could exit while modbus_point's separate /tags
+        # message was still in flight, and classify_point(modbus_point)
+        # below would see no tags yet (spurious "miss").
         return (
             read_latest(ts_conn, str(bacnet_point)) is not None
             and read_latest(ts_conn, str(modbus_point)) is not None
-            and len(list(tagged)) > 0
+            and _is_tagged(bacnet_point)
+            and _is_tagged(modbus_point)
         )
 
     for _ in range(30):  # up to ~3s, no arbitrary long sleep

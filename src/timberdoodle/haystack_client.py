@@ -170,7 +170,7 @@ class HaystackClient:
         return {k: _decode_haystack_scalar(v) for k, v in row.items()}
 
     def read(self, filter: str, limit: int | None = None) -> list[dict]:
-        params = {"filter": filter}
+        params: dict[str, str | int] = {"filter": filter}
         if limit is not None:
             params["limit"] = limit
         rows = self._get("read", params)["rows"]

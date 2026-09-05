@@ -23,10 +23,11 @@ class OpenMeteoClient:
         verbatim (each requested variable name -> value, plus a `time`
         ISO string), not the whole response (elevation/current_units/
         hourly/etc. aren't needed downstream)."""
-        resp = self._session.get(BASE_URL, params={
+        params: dict[str, str | float] = {
             "latitude": self.latitude,
             "longitude": self.longitude,
             "current": ",".join(variables),
-        })
+        }
+        resp = self._session.get(BASE_URL, params=params)
         resp.raise_for_status()
         return resp.json()["current"]

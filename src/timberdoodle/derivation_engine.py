@@ -117,7 +117,7 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict,
     input_windows = derivation.get("input_windows") or {}
     output_cfg = derivation.get("output", {})
 
-    trace = []
+    trace: list[dict] = []
     rows = list(store.query(derivation["select"]))
     for row in rows:
         target_uri = str(getattr(row, target_var))
