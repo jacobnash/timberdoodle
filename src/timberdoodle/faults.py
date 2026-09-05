@@ -13,6 +13,8 @@ from datetime import datetime
 
 import psycopg
 
+from timberdoodle.schemas import WebhookHealth
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS faults (
     id          BIGSERIAL PRIMARY KEY,
@@ -147,7 +149,7 @@ def is_webhook_disabled(conn: psycopg.Connection, webhook_id: str) -> bool:
     return bool(row[0]) if row else False
 
 
-def list_webhook_health(conn: psycopg.Connection) -> dict[str, dict]:
+def list_webhook_health(conn: psycopg.Connection) -> dict[str, WebhookHealth]:
     """Every webhook's health in one query, keyed by webhook_id - the
     GET /webhooks list endpoint needs this for every row, not just one,
     so a single batch query beats is_webhook_disabled()'s per-id lookup
