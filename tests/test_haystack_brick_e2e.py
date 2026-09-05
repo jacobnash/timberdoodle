@@ -36,7 +36,11 @@ from threading import Thread
 import pytest
 import requests
 
-from timberdoodle.fake_haystack_server import TEST_PASSWORD, TEST_USER, make_fake_haxall_server
+from timberdoodle.fake_haystack_server import (
+    TEST_PASSWORD,
+    TEST_USER,
+    make_fake_haxall_server,
+)
 from timberdoodle.haystack_client import HaystackClient
 from timberdoodle.haystack_pull_state import ensure_schema
 from timberdoodle.haystack_puller import pull_once
