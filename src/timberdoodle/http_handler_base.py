@@ -18,8 +18,12 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any
 
 
-def respond_json(handler: BaseHTTPRequestHandler, status: int, payload) -> None:
-    body = json.dumps(payload).encode("utf-8")
+def respond_json(handler: BaseHTTPRequestHandler, status: int, payload, default=None) -> None:
+    # default is json.dumps's own `default=` serializer hook - derivation_api.py
+    # passes `str` since derivation traces can carry non-JSON-native values
+    # (e.g. datetimes); every other caller leaves it None (json.dumps's own
+    # default), unchanged from before this was shared.
+    body = json.dumps(payload, default=default).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))

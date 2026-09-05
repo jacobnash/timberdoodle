@@ -43,6 +43,19 @@ def test_respond_json_writes_status_headers_and_body():
     assert json.loads(handler.wfile.read()) == {"id": "abc"}
 
 
+def test_respond_json_passes_through_a_default_serializer():
+    """derivation_api.py needs json.dumps's own default= hook (traces can
+    carry datetimes) - every other caller leaves this None/unchanged."""
+    import datetime
+
+    handler = _make_handler()
+
+    respond_json(handler, 200, {"ts": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)}, default=str)
+
+    handler.wfile.seek(0)
+    assert json.loads(handler.wfile.read()) == {"ts": "2026-01-01 00:00:00+00:00"}
+
+
 def test_respond_error_wraps_message_in_error_key():
     handler = _make_handler()
 
