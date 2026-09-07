@@ -4,7 +4,7 @@ info:
   version: "1.0.0"
   description: |
     CRUD for derivations - definitions of synthetic/computed histories,
-    Timberdoodle's answer to SkySpark's rule engine. A derivation names a
+    computed via Timberdoodle's own rule engine. A derivation names a
     SPARQL query that selects what to run over and a Python function (the
     "lambda") that computes the value; the result is written back as a new
     point in `point_history` and attached to its target entity in the

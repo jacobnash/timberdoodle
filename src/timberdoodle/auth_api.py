@@ -16,12 +16,14 @@ public gateway at all, so the header is meaningless there).
 """
 
 import argparse
-import json
 import os
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from timberdoodle import auth, docs_ui, gateway_auth, tracing
+from timberdoodle.http_handler_base import BaseAPIHandler
+from timberdoodle.http_handler_base import respond_error as _respond_error
+from timberdoodle.http_handler_base import respond_json as _respond_json
 from timberdoodle.timeseries import connect_pool
 
 tracer = tracing.get_tracer(__name__)
@@ -29,32 +31,11 @@ tracer = tracing.get_tracer(__name__)
 OPENAPI_SPEC_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "auth-api-openapi.yaml")
 
 
-def _respond_json(handler, status: int, payload) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-def _respond_error(handler, status: int, message: str) -> None:
-    _respond_json(handler, status, {"error": message})
-
-
 def make_handler(ts_pool):
-    class AuthHandler(BaseHTTPRequestHandler):
-        def _read_json_body(self) -> dict:
-            length = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
-
-        def _handle(self, span_name: str, fn) -> None:
-            with tracer.start_as_current_span(span_name) as span:
-                try:
-                    fn(span)
-                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                    span.set_attribute("error", str(exc))
-                    _respond_error(self, 400, str(exc))
+    class AuthHandler(BaseAPIHandler):
+        TRACER = tracer
+        ALLOWED_METHODS = "GET, POST, DELETE, OPTIONS"
+        ALLOWED_HEADERS = "Content-Type, Authorization"
 
         def _require_gateway(self) -> bool:
             if gateway_auth.request_came_through_gateway(self):
@@ -76,7 +57,7 @@ def make_handler(ts_pool):
             # strips the /auth prefix before it reaches here.
             path = urlparse(self.path).path
             if path == "/login":
-                self._handle("auth_api.post_login", self._login)
+                self.handle_traced("auth_api.post_login", self._login)
                 return
             if path == "/orgs":
                 # Public, like /login - creating a brand-new org has to
@@ -85,21 +66,21 @@ def make_handler(ts_pool):
                 # call), same bootstrap reasoning as create_org() in
                 # auth.py. gateway/njs/policy.js marks this route public
                 # to match.
-                self._handle("auth_api.post_orgs", self._create_org)
+                self.handle_traced("auth_api.post_orgs", self._create_org)
                 return
             if not self._require_gateway():
                 return
             if path == "/logout":
-                self._handle("auth_api.post_logout", self._logout)
+                self.handle_traced("auth_api.post_logout", self._logout)
                 return
             if path == "/api-keys":
-                self._handle("auth_api.post_api_keys", self._create_api_key)
+                self.handle_traced("auth_api.post_api_keys", self._create_api_key)
                 return
             if path == "/sites":
-                self._handle("auth_api.post_sites", self._create_site)
+                self.handle_traced("auth_api.post_sites", self._create_site)
                 return
             if path == "/users":
-                self._handle("auth_api.post_users", self._create_user)
+                self.handle_traced("auth_api.post_users", self._create_user)
                 return
             self.send_response(404)
             self.end_headers()
@@ -111,10 +92,10 @@ def make_handler(ts_pool):
                 # prefix, and no gateway location proxies this path at
                 # all) - reachable only container-to-container, so no
                 # gateway check here either.
-                self._handle("auth_api.get_revoked_jtis", self._get_revoked_jtis)
+                self.handle_traced("auth_api.get_revoked_jtis", self._get_revoked_jtis)
                 return
             if path == "/openapi.yaml":
-                self._serve_openapi_spec()
+                self.serve_openapi_spec("auth_api.get_openapi_spec", OPENAPI_SPEC_PATH)
                 return
             if path == "/docs":
                 docs_ui.serve(self)
@@ -122,10 +103,10 @@ def make_handler(ts_pool):
             if not self._require_gateway():
                 return
             if path == "/api-keys":
-                self._handle("auth_api.get_api_keys", self._list_api_keys)
+                self.handle_traced("auth_api.get_api_keys", self._list_api_keys)
                 return
             if path == "/me":
-                self._handle("auth_api.get_me", self._get_me)
+                self.handle_traced("auth_api.get_me", self._get_me)
                 return
             self.send_response(404)
             self.end_headers()
@@ -136,13 +117,13 @@ def make_handler(ts_pool):
             path = urlparse(self.path).path
             if path.startswith("/api-keys/"):
                 key_id = path[len("/api-keys/"):]
-                self._handle("auth_api.delete_api_key", lambda span: self._delete_api_key(key_id, span))
+                self.handle_traced("auth_api.delete_api_key", lambda span: self._delete_api_key(key_id, span))
                 return
             self.send_response(404)
             self.end_headers()
 
         def _login(self, span) -> None:
-            body = self._read_json_body()
+            body = self.read_json_body()
             email = body["email"]
             password = body["password"]
             with ts_pool.connection() as conn:
@@ -178,7 +159,7 @@ def make_handler(ts_pool):
             caller = self._require_caller(span)
             if not caller:
                 return
-            body = self._read_json_body()
+            body = self.read_json_body()
             role = body["role"]
             site_ids = body.get("site_ids")
             expires_in_seconds = body.get("expires_in_seconds")
@@ -214,7 +195,7 @@ def make_handler(ts_pool):
             })
 
         def _create_org(self, span) -> None:
-            body = self._read_json_body()
+            body = self.read_json_body()
             with ts_pool.connection() as conn:
                 org = auth.create_org(conn, body["name"], body["admin_email"], body["admin_password"])
             span.set_attribute("org_id", org["id"])
@@ -224,7 +205,7 @@ def make_handler(ts_pool):
             caller = self._require_caller(span)
             if not caller:
                 return
-            body = self._read_json_body()
+            body = self.read_json_body()
             with ts_pool.connection() as conn:
                 site = auth.create_site(conn, caller["org_id"], body["name"])
             span.set_attribute("site_id", site["id"])
@@ -234,7 +215,7 @@ def make_handler(ts_pool):
             caller = self._require_caller(span)
             if not caller:
                 return
-            body = self._read_json_body()
+            body = self.read_json_body()
             with ts_pool.connection() as conn:
                 user = auth.create_user(conn, caller["org_id"], body["email"], body["password"], body["role"])
             span.set_attribute("new_user_id", user["id"])
@@ -245,29 +226,6 @@ def make_handler(ts_pool):
                 jtis = auth.list_revoked_jtis(conn)
             span.set_attribute("count", len(jtis))
             _respond_json(self, 200, jtis)
-
-        def _serve_openapi_spec(self) -> None:
-            with tracer.start_as_current_span("auth_api.get_openapi_spec"):
-                with open(OPENAPI_SPEC_PATH, "rb") as f:
-                    body = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/yaml")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-        def do_OPTIONS(self):
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-            self.end_headers()
-
-        def end_headers(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            super().end_headers()
-
-        def log_message(self, fmt, *args):
-            pass  # quiet by default; tracing carries the real signal
 
     return AuthHandler
 

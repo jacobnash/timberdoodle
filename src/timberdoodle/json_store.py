@@ -26,7 +26,7 @@ class RuleCache:
 
     def __init__(self, path: str):
         self.path = path
-        self._mtime = None
+        self._mtime: float | None = None
         self._records: list[dict] = []
 
     def get(self) -> list[dict]:

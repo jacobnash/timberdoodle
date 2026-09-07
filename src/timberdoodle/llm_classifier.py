@@ -23,6 +23,15 @@ tracer = tracing.get_tracer(__name__)
 MODEL = "claude-haiku-4-5"
 
 
+class LLMClassificationError(Exception):
+    """Raised when the model's response can't be parsed into
+    _ClassificationSchema (response.parsed_output is None) - a real,
+    if rare, outcome the Anthropic SDK's own types allow for. Distinct
+    from a network failure, but treated the same way (retry, then skip)
+    by callers like autotag.run(), since a re-prompt of the same input
+    can succeed where the first parse attempt didn't."""
+
+
 class _ClassificationSchema(BaseModel):
     brick_class: str
     confidence: float
@@ -72,6 +81,8 @@ def classify_with_llm(
             output_format=_ClassificationSchema,
         )
         parsed = response.parsed_output
+        if parsed is None:
+            raise LLMClassificationError(f"model returned no parsed output for tags={sorted(tags)}, label={label!r}")
 
         span.set_attribute("brick_class", parsed.brick_class)
         span.set_attribute("confidence", parsed.confidence)

@@ -41,6 +41,8 @@ const ROUTES = [
   ["DELETE", /^\/fault\/webhooks\/[^/]+$/,            "webhooks", "operator"],
   ["POST",   /^\/fault\/webhooks\/[^/]+\/enable$/,     "webhooks", "operator"],
   ["GET",    /^\/fault\/faults$/,                    "faults", "viewer"],
+  ["POST",   /^\/fault\/faults\/[^/]+\/ack$/,          "faults", "operator"],
+  ["POST",   /^\/fault\/faults\/[^/]+\/snooze$/,       "faults", "operator"],
 
   // derivation_api
   ["POST",   /^\/derivation\/derivations$/,                              "derivations", "operator"],

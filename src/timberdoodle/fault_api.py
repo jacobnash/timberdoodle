@@ -8,20 +8,35 @@ extending openapi.yaml (see fault-api-openapi.yaml's own note on this).
 """
 
 import argparse
-import json
 import os
+import re
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timedelta, timezone
+from http.server import ThreadingHTTPServer
+from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 from timberdoodle import docs_ui, gateway_auth, json_store, tracing
-from timberdoodle.faults import enable_webhook, ensure_schema, list_faults, list_webhook_health
+from timberdoodle.faults import (
+    ack_fault,
+    enable_webhook,
+    ensure_schema,
+    list_faults,
+    list_webhook_health,
+    snooze_fault,
+)
+from timberdoodle.http_handler_base import BaseAPIHandler
+from timberdoodle.http_handler_base import respond_json as _respond_json
+from timberdoodle.schemas import CreateWebhookRequest, Webhook, WebhookHealth
 from timberdoodle.timeseries import connect_pool
 from timberdoodle.webhooks import validate_url
 
 tracer = tracing.get_tracer(__name__)
 
 OPENAPI_SPEC_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "fault-api-openapi.yaml")
+
+_ACK_RE = re.compile(r"^/faults/(\d+)/ack$")
+_SNOOZE_RE = re.compile(r"^/faults/(\d+)/snooze$")
 
 # Guards read-modify-write on rules.json/webhooks.json against concurrent
 # requests within this one process (ThreadingHTTPServer = one thread per
@@ -30,28 +45,14 @@ OPENAPI_SPEC_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "fault-a
 _file_lock = threading.Lock()
 
 
-def _respond_json(handler, status: int, payload) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-def _respond_error(handler, status: int, message: str) -> None:
-    _respond_json(handler, status, {"error": message})
-
-
-def _redact_webhook(webhook: dict) -> dict:
+def _redact_webhook(webhook: Webhook) -> Webhook:
     return {**webhook, "secret": None}
 
 
 def make_handler(rules_path: str, webhooks_path: str, ts_pool):
-    class FaultHandler(BaseHTTPRequestHandler):
-        def _read_json_body(self) -> dict:
-            length = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    class FaultHandler(BaseAPIHandler):
+        TRACER = tracer
+        ALLOWED_METHODS = "GET, POST, DELETE, OPTIONS"
 
         def _require_gateway(self) -> bool:
             if gateway_auth.request_came_through_gateway(self):
@@ -64,21 +65,29 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             if not self._require_gateway():
                 return
             if self.path == "/rules":
-                self._handle("api.post_rules", self._create_rule)
+                self.handle_traced("api.post_rules", self._create_rule)
                 return
             if self.path == "/webhooks":
-                self._handle("api.post_webhooks", self._create_webhook)
+                self.handle_traced("api.post_webhooks", self._create_webhook)
                 return
             if self.path.startswith("/webhooks/") and self.path.endswith("/enable"):
                 webhook_id = self.path[len("/webhooks/"):-len("/enable")]
-                self._handle("api.post_webhook_enable", lambda span: self._enable_webhook(webhook_id, span))
+                self.handle_traced("api.post_webhook_enable", lambda span: self._enable_webhook(webhook_id, span))
+                return
+            ack_match = _ACK_RE.match(self.path)
+            if ack_match:
+                self.handle_traced("api.ack_fault", lambda span: self._ack_fault(int(ack_match.group(1)), span))
+                return
+            snooze_match = _SNOOZE_RE.match(self.path)
+            if snooze_match:
+                self.handle_traced("api.snooze_fault", lambda span: self._snooze_fault(int(snooze_match.group(1)), span))
                 return
             self.send_response(404)
             self.end_headers()
 
         def do_GET(self):
             if self.path == "/openapi.yaml":
-                self._serve_openapi_spec()
+                self.serve_openapi_spec("api.get_openapi_spec", OPENAPI_SPEC_PATH)
                 return
             if self.path == "/docs":
                 docs_ui.serve(self)
@@ -86,23 +95,23 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             if not self._require_gateway():
                 return
             if self.path == "/rules":
-                self._handle("api.get_rules", lambda span: _respond_json(self, 200, json_store.load(rules_path)))
+                self.handle_traced("api.get_rules", lambda span: _respond_json(self, 200, json_store.load(rules_path)))
                 return
             if self.path == "/webhooks":
                 def handle(span):
                     with ts_pool.connection() as conn:
                         health = list_webhook_health(conn)
-                    default_health = {"disabled": False, "consecutive_failures": 0, "last_error": None}
+                    default_health: WebhookHealth = {"disabled": False, "consecutive_failures": 0, "last_error": None}
                     webhooks = [
                         {**_redact_webhook(w), **health.get(w["id"], default_health)}
-                        for w in json_store.load(webhooks_path)
+                        for w in cast(list[Webhook], json_store.load(webhooks_path))
                     ]
                     _respond_json(self, 200, webhooks)
 
-                self._handle("api.get_webhooks", handle)
+                self.handle_traced("api.get_webhooks", handle)
                 return
             if self.path.startswith("/faults"):
-                self._handle("api.get_faults", self._list_faults)
+                self.handle_traced("api.get_faults", self._list_faults)
                 return
             self.send_response(404)
             self.end_headers()
@@ -112,25 +121,17 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
                 return
             if self.path.startswith("/rules/"):
                 rule_id = self.path[len("/rules/"):]
-                self._handle("api.delete_rule", lambda span: self._delete(rules_path, rule_id, span))
+                self.handle_traced("api.delete_rule", lambda span: self._delete(rules_path, rule_id, span))
                 return
             if self.path.startswith("/webhooks/"):
                 webhook_id = self.path[len("/webhooks/"):]
-                self._handle("api.delete_webhook", lambda span: self._delete(webhooks_path, webhook_id, span))
+                self.handle_traced("api.delete_webhook", lambda span: self._delete(webhooks_path, webhook_id, span))
                 return
             self.send_response(404)
             self.end_headers()
 
-        def _handle(self, span_name: str, fn) -> None:
-            with tracer.start_as_current_span(span_name) as span:
-                try:
-                    fn(span)
-                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                    span.set_attribute("error", str(exc))
-                    _respond_error(self, 400, str(exc))
-
         def _create_rule(self, span) -> None:
-            body = self._read_json_body()
+            body = self.read_json_body()
             rule = {
                 "id": json_store.new_id(),
                 "name": body["name"],
@@ -147,19 +148,19 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             _respond_json(self, 201, rule)
 
         def _create_webhook(self, span) -> None:
-            body = self._read_json_body()
+            body = cast(CreateWebhookRequest, self.read_json_body())
             # Same deployment-level escape hatch as fault_detector.py's
             # delivery-time check - never a per-request/per-webhook toggle.
             allow_private = os.environ.get("TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS") == "1"
-            validate_url(body["url"], allow_private=allow_private)  # raises ValueError -> 400, via _handle's except clause
-            webhook = {
+            validate_url(body["url"], allow_private=allow_private)  # raises ValueError -> 400, via handle_traced's except clause
+            webhook: Webhook = {
                 "id": json_store.new_id(),
                 "url": body["url"],
                 "secret": body["secret"],
                 "filter": body.get("filter"),
             }
             with _file_lock:
-                webhooks = json_store.load(webhooks_path)
+                webhooks = cast(list[Webhook], json_store.load(webhooks_path))
                 webhooks.append(webhook)
                 json_store.save(webhooks_path, webhooks)
             span.set_attribute("webhook_id", webhook["id"])
@@ -189,6 +190,37 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             self.send_response(204)
             self.end_headers()
 
+        def _ack_fault(self, fault_id: int, span) -> None:
+            span.set_attribute("fault_id", fault_id)
+            # X-User is gateway-set ("<sub>:<role>", see gateway/njs/main.js)
+            # and documented there as logging/tracing only, not an authz
+            # input - fine for "who acked this" attribution, same trust
+            # level as any other audit-trail field this API already writes.
+            acked_by = self.headers.get("X-User", "unknown")
+            with ts_pool.connection() as conn:
+                found = ack_fault(conn, fault_id, acked_by, datetime.now(timezone.utc))
+            if not found:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(204)
+            self.end_headers()
+
+        def _snooze_fault(self, fault_id: int, span) -> None:
+            span.set_attribute("fault_id", fault_id)
+            body = self.read_json_body()
+            minutes = body["minutes"]
+            if not isinstance(minutes, (int, float)) or minutes <= 0:
+                raise ValueError("minutes must be a positive number")
+            until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            with ts_pool.connection() as conn:
+                found = snooze_fault(conn, fault_id, until)
+            if not found:
+                self.send_response(404)
+                self.end_headers()
+                return
+            _respond_json(self, 200, {"id": fault_id, "snoozed_until": until.isoformat()})
+
         def _list_faults(self, span) -> None:
             query = parse_qs(urlparse(self.path).query)
             status = query.get("status", [None])[0]
@@ -198,31 +230,6 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
                 faults = list_faults(conn, status=status, point_uri=point_uri, rule_id=rule_id)
             span.set_attribute("count", len(faults))
             _respond_json(self, 200, faults)
-
-        def _serve_openapi_spec(self) -> None:
-            with tracer.start_as_current_span("api.get_openapi_spec"):
-                with open(OPENAPI_SPEC_PATH, "rb") as f:
-                    body = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/yaml")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-        def do_OPTIONS(self):
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
-
-        def end_headers(self):
-            # Lets the docs site's live try-it playground (served from a
-            # different origin/port) call this API directly from the browser.
-            self.send_header("Access-Control-Allow-Origin", "*")
-            super().end_headers()
-
-        def log_message(self, fmt, *args):
-            pass  # quiet by default; tracing carries the real signal
 
     return FaultHandler
 

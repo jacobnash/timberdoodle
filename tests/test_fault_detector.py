@@ -14,7 +14,12 @@ from threading import Thread
 
 import pytest
 
-from timberdoodle.fault_detector import RuleCache, evaluate_his_rules, evaluate_range_rule, handle_cur_reading
+from timberdoodle.fault_detector import (
+    RuleCache,
+    evaluate_his_rules,
+    evaluate_range_rule,
+    handle_cur_reading,
+)
 from timberdoodle.faults import ensure_schema, list_faults
 from timberdoodle.ingest import ingest_tags
 from timberdoodle.mapping import classify_point
@@ -189,7 +194,6 @@ def test_his_stuck_rule_does_not_fire_on_real_changing_fan_status(fault_conn, tm
     genuinely toggles every 5s - a stuck rule with a reasonable window
     must never false-positive on it."""
     ts_conn = connect()
-    point_uri = "urn:point:fbf/mock-ahu-1/binaryValue,1"
 
     webhooks_file = tmp_path / "webhooks.json"
     webhooks_file.write_text("[]")
@@ -206,7 +210,7 @@ def test_cur_brick_class_rule_opens_fault_without_a_topic_glob(fault_conn, tmp_p
     not a topic string, and still opens a fault - proving the point's topic
     (whatever building/naming scheme it came from) never has to appear in
     the rule itself."""
-    from timberdoodle.ingest import ingest_tags, topic_to_point_uri
+    from timberdoodle.ingest import ingest_tags
     from timberdoodle.mapping import classify_point
     from timberdoodle.remote_store import RemoteStore
 

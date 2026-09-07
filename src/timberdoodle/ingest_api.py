@@ -9,13 +9,23 @@ import argparse
 import json
 import os
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from rdflib import URIRef
 
 from timberdoodle import docs_ui, gateway_auth, tracing
-from timberdoodle.ingest import ingest_reading, ingest_tags, link_equip_ref, link_part_of, merge_equip, topic_to_point_uri
+from timberdoodle.http_handler_base import BaseAPIHandler
+from timberdoodle.http_handler_base import respond_error as _respond_error
+from timberdoodle.http_handler_base import respond_json as _respond_json
+from timberdoodle.ingest import (
+    ingest_reading,
+    ingest_tags,
+    link_equip_ref,
+    link_part_of,
+    merge_equip,
+    topic_to_point_uri,
+)
 from timberdoodle.mapping import reclassify
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.timeseries import connect_pool, delete_point_value, read_range
@@ -30,21 +40,11 @@ OPENAPI_SPEC_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "openapi
 _EPOCH_START = datetime.fromtimestamp(0, tz=timezone.utc)
 
 
-def _respond_json(handler, status: int, payload) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-def _respond_error(handler, status: int, message: str) -> None:
-    _respond_json(handler, status, {"error": message})
-
-
 def make_handler(store, ts_pool):
-    class IngestHandler(BaseHTTPRequestHandler):
+    class IngestHandler(BaseAPIHandler):
+        TRACER = tracer
+        ALLOWED_METHODS = "GET, POST, DELETE, OPTIONS"
+
         def _require_gateway(self) -> bool:
             if gateway_auth.request_came_through_gateway(self):
                 return True
@@ -178,14 +178,7 @@ def make_handler(store, ts_pool):
                 return
 
             if self.path == "/openapi.yaml":
-                with tracer.start_as_current_span("ingest_api.get_openapi_spec"):
-                    with open(OPENAPI_SPEC_PATH, "rb") as f:
-                        body = f.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/yaml")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                self.serve_openapi_spec("ingest_api.get_openapi_spec", OPENAPI_SPEC_PATH)
                 return
 
             if not self._require_gateway():
@@ -250,21 +243,6 @@ def make_handler(store, ts_pool):
                 span.set_attribute("found", found)
                 self.send_response(204 if found else 404)
                 self.end_headers()
-
-        def do_OPTIONS(self):
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
-
-        def end_headers(self):
-            # Lets the docs site's live try-it playground (served from a
-            # different origin/port) call this API directly from the browser.
-            self.send_header("Access-Control-Allow-Origin", "*")
-            super().end_headers()
-
-        def log_message(self, fmt, *args):
-            pass  # quiet by default; tracing carries the real signal
 
     return IngestHandler
 

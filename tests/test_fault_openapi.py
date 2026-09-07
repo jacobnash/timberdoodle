@@ -8,13 +8,11 @@ import time
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
-import jsonschema
 import pytest
 import requests
 import yaml
+from conftest import assert_matches_schema, load_spec
 from openapi_spec_validator import validate
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
 
 from timberdoodle.fault_api import OPENAPI_SPEC_PATH, make_handler
 from timberdoodle.faults import ensure_schema
@@ -23,8 +21,7 @@ from timberdoodle.timeseries import connect_pool
 
 @pytest.fixture(scope="module")
 def spec() -> dict:
-    with open(OPENAPI_SPEC_PATH) as f:
-        return yaml.safe_load(f)
+    return load_spec(OPENAPI_SPEC_PATH)
 
 
 def test_spec_is_well_formed_openapi(spec):
@@ -41,19 +38,10 @@ def _lookup(spec: dict, ref: str) -> dict:
 def _response_schema(spec: dict, response: dict) -> dict:
     """Resolves a response-level $ref (e.g. '#/components/responses/BadRequest')
     before drilling into .content.application/json.schema - distinct from
-    a schema-level $ref, which _assert_matches_schema handles separately."""
+    a schema-level $ref, which assert_matches_schema handles separately."""
     if "$ref" in response:
         response = _lookup(spec, response["$ref"])
     return response["content"]["application/json"]["schema"]
-
-
-def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
-    resource = Resource.from_contents(spec, default_specification=DRAFT202012)
-    registry = Registry().with_resource(uri="spec", resource=resource)
-    if "$ref" in schema and schema["$ref"].startswith("#"):
-        schema = {"$ref": f"spec{schema['$ref']}"}
-    validator_cls = jsonschema.validators.validator_for(schema)
-    validator_cls(schema, registry=registry).validate(instance)
 
 
 GATEWAY_SECRET = "test-gateway-secret"
@@ -110,7 +98,7 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(gw, live_server
     )
     assert rule_resp.status_code == 201
     rule = rule_resp.json()
-    _assert_matches_schema(rule, spec["paths"]["/rules"]["post"]["responses"]["201"]["content"]["application/json"]["schema"], spec)
+    assert_matches_schema(rule, spec["paths"]["/rules"]["post"]["responses"]["201"]["content"]["application/json"]["schema"], spec)
 
     list_resp = gw.get(f"{live_server}/rules")
     assert list_resp.status_code == 200
@@ -131,7 +119,7 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(gw, live_server
     assert matching["disabled"] is False
     assert matching["consecutive_failures"] == 0
     assert matching["last_error"] is None
-    _assert_matches_schema(matching, {"$ref": "#/components/schemas/Webhook"}, spec)
+    assert_matches_schema(matching, {"$ref": "#/components/schemas/Webhook"}, spec)
 
     enable_resp = gw.post(f"{live_server}/webhooks/{webhook['id']}/enable")
     assert enable_resp.status_code == 204
@@ -142,10 +130,45 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(gw, live_server
     assert faults_resp.status_code == 200
     assert isinstance(faults_resp.json(), list)
 
+    # ack/snooze need a real fault row - open one directly against the same
+    # DB this live server's ts_pool points at (fault_detector.py's job, not
+    # this API's, to open faults - so bypass it here).
+    from datetime import datetime, timedelta, timezone
+
+    from timberdoodle.faults import open_fault
+    from timberdoodle.timeseries import connect
+
+    ts_conn = connect()
+    fault_id = open_fault(ts_conn, rule["id"], "urn:point:test-openapi-fd/ack-snooze", datetime.now(timezone.utc), severity="critical")
+    ts_conn.close()
+
+    ack_resp = gw.post(f"{live_server}/faults/{fault_id}/ack")
+    assert ack_resp.status_code == 204
+    ack_missing_resp = gw.post(f"{live_server}/faults/999999999/ack")
+    assert ack_missing_resp.status_code == 404
+
+    snooze_resp = gw.post(f"{live_server}/faults/{fault_id}/snooze", json={"minutes": 30})
+    assert snooze_resp.status_code == 200
+    assert_matches_schema(
+        snooze_resp.json(),
+        spec["paths"]["/faults/{id}/snooze"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
+        spec,
+    )
+    snooze_bad_resp = gw.post(f"{live_server}/faults/{fault_id}/snooze", json={"minutes": -5})
+    assert snooze_bad_resp.status_code == 400
+    snooze_missing_resp = gw.post(f"{live_server}/faults/999999999/snooze", json={"minutes": 5})
+    assert snooze_missing_resp.status_code == 404
+
+    acked_fault = next(f for f in gw.get(f"{live_server}/faults").json() if f["id"] == fault_id)
+    assert acked_fault["severity"] == "critical"
+    assert acked_fault["acked_by"] is not None
+    assert acked_fault["snoozed_until"] is not None
+    assert_matches_schema(acked_fault, {"$ref": "#/components/schemas/Fault"}, spec)
+
     # malformed body -> documented 400
     bad_resp = gw.post(f"{live_server}/rules", json={"mode": "cur"})  # missing name/type/applies_to
     assert bad_resp.status_code == 400
-    _assert_matches_schema(bad_resp.json(), _response_schema(spec, spec["paths"]["/rules"]["post"]["responses"]["400"]), spec)
+    assert_matches_schema(bad_resp.json(), _response_schema(spec, spec["paths"]["/rules"]["post"]["responses"]["400"]), spec)
 
     delete_resp = gw.delete(f"{live_server}/rules/{rule['id']}")
     assert delete_resp.status_code == 204

@@ -17,11 +17,23 @@ import json
 import os
 import re
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from functools import partial
+from http.server import ThreadingHTTPServer
+from typing import cast
 from urllib.parse import unquote
 
-from timberdoodle import derivation_engine, derivation_health, docs_ui, gateway_auth, json_store, sandbox, tracing
+from timberdoodle import (
+    derivation_engine,
+    derivation_health,
+    docs_ui,
+    gateway_auth,
+    json_store,
+    sandbox,
+    tracing,
+)
+from timberdoodle.http_handler_base import BaseAPIHandler, respond_json
 from timberdoodle.remote_store import RemoteStore
+from timberdoodle.schemas import Derivation
 from timberdoodle.timeseries import connect_pool
 
 tracer = tracing.get_tracer(__name__)
@@ -37,18 +49,10 @@ _file_lock = threading.Lock()
 _TARGETS_RE = re.compile(r"^/derivations/([^/]+)/targets$")
 _ENABLE_TARGET_RE = re.compile(r"^/derivations/([^/]+)/targets/([^/]+)/enable$")
 
-
-def _respond_json(handler, status: int, payload) -> None:
-    body = json.dumps(payload, default=str).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-def _respond_error(handler, status: int, message: str) -> None:
-    _respond_json(handler, status, {"error": message})
+# Derivation traces can carry non-JSON-native values (datetimes), unlike
+# every other service's plain JSON payloads - respond_json's default=str
+# keeps this file's json.dumps(payload, default=str) behavior unchanged.
+_respond_json = partial(respond_json, default=str)
 
 
 def _validate_fn_and_test_cases(fn_source: str, test_cases: list[dict]) -> None:
@@ -62,10 +66,10 @@ def _validate_fn_and_test_cases(fn_source: str, test_cases: list[dict]) -> None:
 
 
 def make_handler(derivations_path: str, store, ts_pool):
-    class DerivationHandler(BaseHTTPRequestHandler):
-        def _read_json_body(self) -> dict:
-            length = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+    class DerivationHandler(BaseAPIHandler):
+        TRACER = tracer
+        ALLOWED_METHODS = "GET, POST, DELETE, OPTIONS"
+        ERROR_TYPES = (*BaseAPIHandler.ERROR_TYPES, sandbox.SandboxError)
 
         def _require_gateway(self) -> bool:
             if gateway_auth.request_came_through_gateway(self):
@@ -78,25 +82,25 @@ def make_handler(derivations_path: str, store, ts_pool):
             if not self._require_gateway():
                 return
             if self.path == "/derivations":
-                self._handle("api.post_derivations", self._create_derivation)
+                self.handle_traced("api.post_derivations", self._create_derivation)
                 return
             if self.path == "/derivations/test":
-                self._handle("api.test_derivation", self._test_derivation)
+                self.handle_traced("api.test_derivation", self._test_derivation)
                 return
             if self.path == "/derivations/dry-run":
-                self._handle("api.dry_run_derivation", self._dry_run)
+                self.handle_traced("api.dry_run_derivation", self._dry_run)
                 return
             match = _ENABLE_TARGET_RE.match(self.path)
             if match:
                 derivation_id, target_uri = match.group(1), unquote(match.group(2))
-                self._handle("api.enable_target", lambda span: self._enable_target(derivation_id, target_uri, span))
+                self.handle_traced("api.enable_target", lambda span: self._enable_target(derivation_id, target_uri, span))
                 return
             self.send_response(404)
             self.end_headers()
 
         def do_GET(self):
             if self.path == "/openapi.yaml":
-                self._serve_openapi_spec()
+                self.serve_openapi_spec("api.get_openapi_spec", OPENAPI_SPEC_PATH)
                 return
             if self.path == "/docs":
                 docs_ui.serve(self)
@@ -104,11 +108,11 @@ def make_handler(derivations_path: str, store, ts_pool):
             if not self._require_gateway():
                 return
             if self.path == "/derivations":
-                self._handle("api.get_derivations", lambda span: _respond_json(self, 200, json_store.load(derivations_path)))
+                self.handle_traced("api.get_derivations", lambda span: _respond_json(self, 200, json_store.load(derivations_path)))
                 return
             match = _TARGETS_RE.match(self.path)
             if match:
-                self._handle("api.get_targets", lambda span: self._list_targets(match.group(1), span))
+                self.handle_traced("api.get_targets", lambda span: self._list_targets(match.group(1), span))
                 return
             self.send_response(404)
             self.end_headers()
@@ -118,27 +122,19 @@ def make_handler(derivations_path: str, store, ts_pool):
                 return
             if self.path.startswith("/derivations/"):
                 derivation_id = self.path[len("/derivations/"):]
-                self._handle("api.delete_derivation", lambda span: self._delete(derivation_id, span))
+                self.handle_traced("api.delete_derivation", lambda span: self._delete(derivation_id, span))
                 return
             self.send_response(404)
             self.end_headers()
 
-        def _handle(self, span_name: str, fn) -> None:
-            with tracer.start_as_current_span(span_name) as span:
-                try:
-                    fn(span)
-                except (KeyError, TypeError, ValueError, json.JSONDecodeError, sandbox.SandboxError) as exc:
-                    span.set_attribute("error", str(exc))
-                    _respond_error(self, 400, str(exc))
-
         def _create_derivation(self, span) -> None:
-            body = self._read_json_body()
+            body = self.read_json_body()
             fn_source = body["fn_source"]
             test_cases = body["test_cases"]
             _validate_fn_and_test_cases(fn_source, test_cases)
 
             reserved = {"name", "kind", "fn_source", "test_cases", "window_seconds", "output", "depends_on"}
-            derivation = {
+            derivation: Derivation = {
                 "id": json_store.new_id(),
                 "name": body["name"],
                 "kind": body.get("kind", "formula"),
@@ -150,28 +146,34 @@ def make_handler(derivations_path: str, store, ts_pool):
                 **{k: v for k, v in body.items() if k not in reserved},
             }
             with _file_lock:
-                derivations = json_store.load(derivations_path)
+                derivations = cast(list[Derivation], json_store.load(derivations_path))
                 derivations.append(derivation)
                 json_store.save(derivations_path, derivations)
             span.set_attribute("derivation_id", derivation["id"])
             _respond_json(self, 201, derivation)
 
         def _test_derivation(self, span) -> None:
-            body = self._read_json_body()
+            body = self.read_json_body()
             fn = sandbox.compile_fn(body["fn_source"])
             results = sandbox.run_test_cases(fn, body.get("test_cases", []))
             span.set_attribute("passed", all(r["passed"] for r in results))
             _respond_json(self, 200, results)
 
         def _dry_run(self, span) -> None:
-            body = self._read_json_body()
+            body = self.read_json_body()
+            derivation: Derivation
             if "id" in body and set(body.keys()) <= {"id"}:
-                derivations = json_store.load(derivations_path)
-                derivation = next((d for d in derivations if d["id"] == body["id"]), None)
-                if derivation is None:
+                derivations = cast(list[Derivation], json_store.load(derivations_path))
+                found_derivation = next((d for d in derivations if d["id"] == body["id"]), None)
+                if found_derivation is None:
                     raise ValueError(f"no derivation with id {body['id']!r}")
+                derivation = found_derivation
             else:
-                derivation = {**body, "id": body.get("id", "draft")}
+                # A draft dry-run body may omit fields a persisted Derivation
+                # requires (e.g. name) - dry-run only reads what the engine
+                # actually needs (fn_source, select/root_select, etc.), so
+                # this is a deliberately lenient cast, not a real guarantee.
+                derivation = cast(Derivation, {**body, "id": body.get("id", "draft")})
                 sandbox.compile_fn(derivation["fn_source"])  # fail fast with a clear 400 instead of a silently-skipped trace
 
             span.set_attribute("derivation_id", derivation["id"])
@@ -190,13 +192,17 @@ def make_handler(derivations_path: str, store, ts_pool):
             span.set_attribute("derivation_id", derivation_id)
             span.set_attribute("target", target_uri)
             with ts_pool.connection() as conn:
-                derivation_health.enable_target(conn, derivation_id, target_uri)
-            _respond_json(self, 200, {"derivation_id": derivation_id, "target_uri": target_uri, "disabled": False})
+                target = derivation_health.enable_target(conn, derivation_id, target_uri)
+            if target is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            _respond_json(self, 200, target)
 
         def _delete(self, derivation_id: str, span) -> None:
             span.set_attribute("id", derivation_id)
             with _file_lock:
-                derivations = json_store.load(derivations_path)
+                derivations = cast(list[Derivation], json_store.load(derivations_path))
                 remaining = [d for d in derivations if d["id"] != derivation_id]
                 found = len(remaining) != len(derivations)
                 if found:
@@ -204,29 +210,6 @@ def make_handler(derivations_path: str, store, ts_pool):
             span.set_attribute("found", found)
             self.send_response(204 if found else 404)
             self.end_headers()
-
-        def _serve_openapi_spec(self) -> None:
-            with tracer.start_as_current_span("api.get_openapi_spec"):
-                with open(OPENAPI_SPEC_PATH, "rb") as f:
-                    body = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/yaml")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-        def do_OPTIONS(self):
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
-
-        def end_headers(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            super().end_headers()
-
-        def log_message(self, fmt, *args):
-            pass  # quiet by default; tracing carries the real signal
 
     return DerivationHandler
 

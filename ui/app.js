@@ -16,66 +16,11 @@ const HAYSTACK = "urn:timberdoodle:haystack#";
 const statusEl = document.getElementById("status");
 const treeEl = document.getElementById("tree");
 const detailEl = document.getElementById("detail");
-const mainEl = document.getElementById("main");
-const loginGateEl = document.getElementById("login-gate");
-const loginFormEl = document.getElementById("login-form");
-const loginErrorEl = document.getElementById("login-error");
 
-// Gateway auth (see gateway/njs/policy.js) - only routes proxied through
-// the gateway need a Bearer token; the direct-to-Oxigraph SPARQL calls
-// below are unauthenticated (CORS-open, see docker-compose.yml's `--cors`
-// flag) and untouched by any of this.
-const AUTH_API_URL = params.get("auth") || "/auth";
-const TOKEN_KEY = "td_token";
-const getToken = () => localStorage.getItem(TOKEN_KEY);
-const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
-const clearToken = () => localStorage.removeItem(TOKEN_KEY);
-const authHeaders = () => {
-  const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
-
-function showLoginGate() {
-  mainEl.hidden = true;
-  loginGateEl.hidden = false;
-}
-
-function hideLoginGate() {
-  loginGateEl.hidden = true;
-  mainEl.hidden = false;
-}
-
-// Covers token expiry: any gateway-fronted fetch that comes back 401
-// drops the stale token and re-shows the login form.
-function handleUnauthorized() {
-  clearToken();
-  showLoginGate();
-}
-
-loginFormEl.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  loginErrorEl.hidden = true;
-  const email = document.getElementById("login-email").value;
-  const password = document.getElementById("login-password").value;
-  try {
-    const res = await fetch(`${AUTH_API_URL}/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    if (!res.ok) {
-      throw new Error(res.status === 401 ? "invalid email or password" : `login failed: ${res.status}`);
-    }
-    const body = await res.json();
-    setToken(body.token);
-    hideLoginGate();
-    statusEl.textContent = "connecting…";
-    init();
-  } catch (err) {
-    loginErrorEl.textContent = err.message;
-    loginErrorEl.hidden = false;
-  }
-});
+// Gateway auth (see gateway/njs/policy.js, ui/auth.js) - only routes
+// proxied through the gateway need a Bearer token; the direct-to-Oxigraph
+// SPARQL calls below are unauthenticated (CORS-open, see
+// docker-compose.yml's `--cors` flag) and untouched by any of this.
 
 async function sparql(query) {
   const res = await fetch(OXIGRAPH_URL, {
@@ -414,43 +359,8 @@ function renderHistoryInto(container, history) {
   drawLineChart(canvas, history);
 }
 
-function drawLineChart(canvas, history) {
-  const ctx = canvas.getContext("2d");
-  const pad = 30;
-  const w = canvas.width - pad * 2;
-  const h = canvas.height - pad * 2;
-
-  const values = history.map((r) => r.value);
-  const times = history.map((r) => r.ts);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const spanV = maxV - minV || 1;
-  const minT = Math.min(...times);
-  const maxT = Math.max(...times);
-  const spanT = maxT - minT || 1;
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = "currentColor";
-  ctx.globalAlpha = 0.3;
-  ctx.strokeRect(pad, pad, w, h);
-  ctx.globalAlpha = 1;
-
-  ctx.fillStyle = "currentColor";
-  ctx.font = "11px sans-serif";
-  ctx.fillText(maxV.toFixed(2), 2, pad + 4);
-  ctx.fillText(minV.toFixed(2), 2, pad + h);
-
-  ctx.strokeStyle = "#2b6cb0";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  history.forEach((row, i) => {
-    const x = pad + ((row.ts - minT) / spanT) * w;
-    const y = pad + h - ((row.value - minV) / spanV) * h;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-}
+// drawLineChart itself now lives in chart.js (shared with derivations.js) -
+// see index.html's script tags for load order.
 
 async function init() {
   try {
@@ -469,9 +379,4 @@ async function init() {
   }
 }
 
-if (getToken()) {
-  hideLoginGate();
-  init();
-} else {
-  showLoginGate();
-}
+initAuth(init);

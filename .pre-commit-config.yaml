@@ -1,0 +1,11 @@
+# Optional local dev tool - `pip install pre-commit && pre-commit install`
+# to enable. Mirrors the non-blocking ruff check CI already runs
+# (PLAN.md Stage 0.2/Guardrails); ruff-format is deliberately not added
+# here yet - no formatter has been adopted (PLAN.md Stage 3.3 is an open
+# team decision, not this hook's call to make).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff
+        args: [--fix]

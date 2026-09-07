@@ -13,6 +13,8 @@ from datetime import datetime
 
 import psycopg
 
+from timberdoodle.schemas import WebhookHealth
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS faults (
     id          BIGSERIAL PRIMARY KEY,
@@ -25,6 +27,15 @@ CREATE TABLE IF NOT EXISTS faults (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS faults_open_unique
     ON faults (rule_id, point_uri) WHERE ended_at IS NULL;
+
+-- Alarm-console fields (ack/snooze/severity), added after the table
+-- above already shipped - ADD COLUMN IF NOT EXISTS instead of a separate
+-- migration file/framework, same idempotent-DDL style as every other
+-- ensure_schema() in this repo.
+ALTER TABLE faults ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'warning';
+ALTER TABLE faults ADD COLUMN IF NOT EXISTS acked_at TIMESTAMPTZ;
+ALTER TABLE faults ADD COLUMN IF NOT EXISTS acked_by TEXT;
+ALTER TABLE faults ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS webhook_health (
     webhook_id            TEXT PRIMARY KEY,
@@ -39,22 +50,56 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     conn.execute(SCHEMA)
 
 
-def open_fault(conn: psycopg.Connection, rule_id: str, point_uri: str, started_at: datetime, detail: dict | None = None) -> int | None:
+def open_fault(
+    conn: psycopg.Connection,
+    rule_id: str,
+    point_uri: str,
+    started_at: datetime,
+    detail: dict | None = None,
+    severity: str = "warning",
+) -> int | None:
     """Returns the new fault's id if this is a genuinely new opening (the
     caller should fire webhooks), or None if a fault for this
     (rule_id, point_uri) was already open (no-op). Atomic and race-safe:
     the partial unique index is the ON CONFLICT target, not a
-    check-then-insert race between concurrent callers."""
+    check-then-insert race between concurrent callers. severity is
+    captured at open time from the rule's own config, not looked up
+    live later - editing a rule's severity afterward doesn't retroactively
+    relabel faults it already raised, same reasoning as `detail`."""
     row = conn.execute(
         """
-        INSERT INTO faults (rule_id, point_uri, status, started_at, detail)
-        VALUES (%s, %s, 'open', %s, %s)
+        INSERT INTO faults (rule_id, point_uri, status, started_at, detail, severity)
+        VALUES (%s, %s, 'open', %s, %s, %s)
         ON CONFLICT (rule_id, point_uri) WHERE ended_at IS NULL DO NOTHING
         RETURNING id
         """,
-        (rule_id, point_uri, started_at, json.dumps(detail) if detail is not None else None),
+        (rule_id, point_uri, started_at, json.dumps(detail) if detail is not None else None, severity),
     ).fetchone()
     return row[0] if row else None
+
+
+def ack_fault(conn: psycopg.Connection, fault_id: int, acked_by: str, now: datetime) -> bool:
+    """True if a fault with this id exists (whether or not it was already
+    acked - re-acking just updates who/when, same as SkySpark's console)."""
+    row = conn.execute(
+        "UPDATE faults SET acked_at = %s, acked_by = %s WHERE id = %s RETURNING id",
+        (now, acked_by, fault_id),
+    ).fetchone()
+    return row is not None
+
+
+def snooze_fault(conn: psycopg.Connection, fault_id: int, until: datetime) -> bool:
+    """True if a fault with this id exists. Snoozing only affects display/
+    notification suppression the UI applies client-side - it does not stop
+    fault_detector.py from evaluating the underlying rule, and a fault that
+    resolves and reopens while snoozed gets a fresh row (open_fault's
+    ON CONFLICT target is (rule_id, point_uri) WHERE ended_at IS NULL, not
+    aware of snoozed_until) with snoozed_until reset to NULL."""
+    row = conn.execute(
+        "UPDATE faults SET snoozed_until = %s WHERE id = %s RETURNING id",
+        (until, fault_id),
+    ).fetchone()
+    return row is not None
 
 
 def close_fault(conn: psycopg.Connection, rule_id: str, point_uri: str, ended_at: datetime) -> int | None:
@@ -92,7 +137,9 @@ def list_faults(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     rows = conn.execute(
-        f"SELECT id, rule_id, point_uri, status, started_at, ended_at, detail FROM faults {where} ORDER BY started_at DESC",
+        f"""SELECT id, rule_id, point_uri, status, started_at, ended_at, detail,
+                   severity, acked_at, acked_by, snoozed_until
+            FROM faults {where} ORDER BY started_at DESC""",
         params,
     ).fetchall()
     return [
@@ -104,6 +151,10 @@ def list_faults(
             "started_at": r[4].isoformat(),
             "ended_at": r[5].isoformat() if r[5] else None,
             "detail": r[6],
+            "severity": r[7],
+            "acked_at": r[8].isoformat() if r[8] else None,
+            "acked_by": r[9],
+            "snoozed_until": r[10].isoformat() if r[10] else None,
         }
         for r in rows
     ]
@@ -124,7 +175,7 @@ def record_webhook_failure(conn: psycopg.Connection, webhook_id: str, error: str
         """,
         (webhook_id, error),
     ).fetchone()
-    failures = row[0]
+    failures = row[0]  # type: ignore[index]  # INSERT...ON CONFLICT DO UPDATE...RETURNING always returns exactly one row; mypy/psycopg's typing can't express that SQL guarantee
     if failures >= disable_threshold:
         conn.execute("UPDATE webhook_health SET disabled = TRUE WHERE webhook_id = %s", (webhook_id,))
         return True
@@ -147,7 +198,7 @@ def is_webhook_disabled(conn: psycopg.Connection, webhook_id: str) -> bool:
     return bool(row[0]) if row else False
 
 
-def list_webhook_health(conn: psycopg.Connection) -> dict[str, dict]:
+def list_webhook_health(conn: psycopg.Connection) -> dict[str, WebhookHealth]:
     """Every webhook's health in one query, keyed by webhook_id - the
     GET /webhooks list endpoint needs this for every row, not just one,
     so a single batch query beats is_webhook_disabled()'s per-id lookup

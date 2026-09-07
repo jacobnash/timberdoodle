@@ -10,16 +10,31 @@ import json
 import time
 from datetime import datetime, timezone
 
-import paho.mqtt.client as mqtt
 import pytest
 from rdflib import URIRef
 
-from timberdoodle.derivation_engine import _output_uri, _topological_order, evaluate_derivations
-from timberdoodle.derivation_health import ensure_schema as ensure_health_schema, enable_target, is_target_disabled, record_target_failure
-from timberdoodle.faults import ensure_schema as ensure_fault_schema, open_fault
-from timberdoodle.ingest import link_part_of, link_point_to_equip, topic_prefix_to_equip_uri, topic_to_point_uri
+from timberdoodle.derivation_engine import (
+    _output_uri,
+    _topological_order,
+    evaluate_derivations,
+)
+from timberdoodle.derivation_health import (
+    enable_target,
+    is_target_disabled,
+    record_target_failure,
+)
+from timberdoodle.derivation_health import ensure_schema as ensure_health_schema
+from timberdoodle.faults import ensure_schema as ensure_fault_schema
+from timberdoodle.faults import open_fault
+from timberdoodle.ingest import (
+    link_part_of,
+    link_point_to_equip,
+    topic_prefix_to_equip_uri,
+    topic_to_point_uri,
+)
 from timberdoodle.mapping import classify_point
 from timberdoodle.mqtt_listener import make_on_message
+from timberdoodle.mqtt_util import make_client
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.store import BRICK, PROV, Store
 from timberdoodle.timeseries import connect, read_latest, write_point_value
@@ -135,7 +150,7 @@ def test_formula_derivation_returning_none_writes_nothing(ts_conn, fault_conn, h
 def test_dry_run_computes_but_writes_nothing(ts_conn, fault_conn, health_conn):
     store = Store()
     now = datetime.now(timezone.utc)
-    equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/dryrun", 1.0, 3.0, now)
+    _equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/dryrun", 1.0, 3.0, now)
     derivation = _avg_derivation("test-de:dryrun", p1, p2)
 
     trace = evaluate_derivations(store, ts_conn, fault_conn, health_conn, [derivation], now=now, dry_run=True)
@@ -180,7 +195,7 @@ def test_chained_derivations_downstream_reads_upstream_output_same_pass(ts_conn,
 def test_open_fault_excludes_input_from_evaluation(ts_conn, fault_conn, health_conn):
     store = Store()
     now = datetime.now(timezone.utc)
-    equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/faulty", 70.0, 74.0, now)
+    _equip, p1, p2 = _seed_two_points(store, ts_conn, "test-de/faulty", 70.0, 74.0, now)
     open_fault(fault_conn, "test-de:stale-rule", str(p1), now)
 
     derivation = _avg_derivation("test-de:fault-filtered", p1, p2, fn_source="def run(inputs, row):\n    return None if not inputs['a'] else 1.0")
@@ -194,8 +209,8 @@ def test_open_fault_excludes_input_from_evaluation(ts_conn, fault_conn, health_c
 def test_uncaught_exception_disables_only_that_target(ts_conn, fault_conn, health_conn):
     store = Store()
     now = datetime.now(timezone.utc)
-    equip_bad, pb1, pb2 = _seed_two_points(store, ts_conn, "test-de/bad", 0.0, 5.0, now)
-    equip_good, pg1, pg2 = _seed_two_points(store, ts_conn, "test-de/good", 10.0, 20.0, now)
+    equip_bad, _pb1, _pb2 = _seed_two_points(store, ts_conn, "test-de/bad", 0.0, 5.0, now)
+    equip_good, _pg1, _pg2 = _seed_two_points(store, ts_conn, "test-de/good", 10.0, 20.0, now)
 
     derivation = {
         "id": "test-de:divider",
@@ -348,7 +363,7 @@ def test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_bro
     bacnet_point = topic_to_point_uri(bacnet_topic)
     modbus_point = topic_to_point_uri(modbus_topic)
 
-    listener = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    listener = make_client()
     listener.on_message = make_on_message(store, ts_conn)
     listener.connect("localhost", 1883)
     listener.subscribe(f"fbf/test-de-bacnet-ahu-{unique}/#")
@@ -358,7 +373,7 @@ def test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_bro
     # rules/haystack_to_brick.yaml maps directly to Zone_Air_Temperature_Sensor.
     zone_temp_tags = {"zone": True, "air": True, "temp": True, "sensor": True}
 
-    publisher = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    publisher = make_client()
     publisher.connect("localhost", 1883)
     now_ts = time.time()
     publisher.publish(bacnet_topic, json.dumps({"value": 70.0, "ts": now_ts}), retain=True)
@@ -367,18 +382,27 @@ def test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_bro
     publisher.publish(f"{modbus_topic}/tags", json.dumps({"value": json.dumps(zone_temp_tags), "ts": now_ts}), retain=True)
     publisher.disconnect()
 
-    def _both_ingested():
+    def _is_tagged(point_uri) -> bool:
         # RemoteStore.query() only exposes SELECT-shaped row iteration (no
         # ASK support, see ingest.link_equip_ref's own note on this) - a
         # SELECT ... LIMIT 1 existence check does the same job.
         tagged = store.query(f"""
             PREFIX haystack: <urn:timberdoodle:haystack#>
-            SELECT ?tag WHERE {{ <{bacnet_point}> haystack:hasTag ?tag }} LIMIT 1
+            SELECT ?tag WHERE {{ <{point_uri}> haystack:hasTag ?tag }} LIMIT 1
         """)
+        return len(list(tagged)) > 0
+
+    def _both_ingested():
+        # Both points' *and* both points' tags - a flaky-under-load
+        # regression found this only checked bacnet_point's tags, so the
+        # wait loop could exit while modbus_point's separate /tags
+        # message was still in flight, and classify_point(modbus_point)
+        # below would see no tags yet (spurious "miss").
         return (
             read_latest(ts_conn, str(bacnet_point)) is not None
             and read_latest(ts_conn, str(modbus_point)) is not None
-            and len(list(tagged)) > 0
+            and _is_tagged(bacnet_point)
+            and _is_tagged(modbus_point)
         )
 
     for _ in range(30):  # up to ~3s, no arbitrary long sleep

@@ -11,8 +11,8 @@ they don't share a recipe.
 If the source speaks a real building-automation protocol with a live
 connection (BACnet, Modbus, a native MQTT device) — that's
 [FBF](../fbf)'s job, not Timberdoodle's. FBF already has a documented,
-repeatable recipe for this: `../fbf/docs/adding-a-new-source.md`. The
-short version — find a mature client library for the protocol, write a
+repeatable recipe for this: [Adding a New Source](/fbf-adding-a-new-source).
+The short version — find a mature client library for the protocol, write a
 `<protocol>_bridge.py` that publishes readings through FBF's frozen MQTT
 envelope (`fbf.mqtt_sink.publish_reading()`), and Timberdoodle's
 `mqtt_listener.py` picks it up unchanged. No code on this side.
@@ -378,7 +378,7 @@ API before implementing.
 
 ### Checklist for a new puller
 
-1. `<source>_client.py` — auth + the minimum read operations you need (see "write this yourself" above).
+1. `<source>_client.py` — auth + the minimum read operations you need (see [write this yourself](#1-source_clientpy--write-this-yourself) above).
 2. `<source>_pull_state.py` — the template above, verbatim, renamed.
 3. `<source>_puller.py` — the template above, with the two `# TODO` blocks filled in.
 4. Add the compose service above to `docker-compose.yml`, behind its own profile.

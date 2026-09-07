@@ -152,7 +152,7 @@ class HaystackClient:
         self._session.headers["Authorization"] = f"BEARER authToken={auth_token}"
         self._authenticated = True
 
-    def _get(self, op: str, params: dict = None, _retry_on_401: bool = True) -> dict:
+    def _get(self, op: str, params: dict | None = None, _retry_on_401: bool = True) -> dict:
         if not self._authenticated:
             self._authenticate()
         resp = self._session.get(f"{self.base_url}/{op}", params=params or {}, headers={"Accept": "application/json"})
@@ -169,8 +169,8 @@ class HaystackClient:
         row = self._get("about")["rows"][0]
         return {k: _decode_haystack_scalar(v) for k, v in row.items()}
 
-    def read(self, filter: str, limit: int = None) -> list[dict]:
-        params = {"filter": filter}
+    def read(self, filter: str, limit: int | None = None) -> list[dict]:
+        params: dict[str, str | int] = {"filter": filter}
         if limit is not None:
             params["limit"] = limit
         rows = self._get("read", params)["rows"]

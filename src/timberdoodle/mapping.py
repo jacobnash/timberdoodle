@@ -12,6 +12,7 @@ import yaml
 from rdflib import RDF, RDFS, SKOS, Literal, URIRef
 
 from timberdoodle import tracing
+from timberdoodle.schemas import MappingRule
 from timberdoodle.store import BRICK, PROJ, TD
 
 tracer = tracing.get_tracer(__name__)
@@ -24,7 +25,7 @@ DEFAULT_RULES_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "rules"
 LLM_CONFIDENCE_THRESHOLD = 0.7
 
 
-def load_rules(path: str = DEFAULT_RULES_PATH) -> list[dict]:
+def load_rules(path: str = DEFAULT_RULES_PATH) -> list[MappingRule]:
     with open(path) as f:
         return yaml.safe_load(f)["rules"]
 
@@ -37,7 +38,7 @@ def read_tags(store, point_uri) -> set[str]:
     return {str(r.tag) for r in rows}
 
 
-def classify_point(store, point_uri, rules: list[dict] | None = None) -> tuple[str, str | None]:
+def classify_point(store, point_uri, rules: list[MappingRule] | None = None) -> tuple[str, str | None]:
     """Three outcomes:
 
     1. **Direct**: some rule's tags are a SUBSET of this point's tags -> the
@@ -94,7 +95,7 @@ def classify_point(store, point_uri, rules: list[dict] | None = None) -> tuple[s
         return "miss", None
 
 
-def classify_point_with_fallback(store, point_uri, rules: list[dict] | None = None, llm_classify=None) -> tuple[str, str | None]:
+def classify_point_with_fallback(store, point_uri, rules: list[MappingRule] | None = None, llm_classify=None) -> tuple[str, str | None]:
     """classify_point, with an injectable LLM fallback for what the rule
     engine can't place. Rule engine runs first, always - llm_classify (see
     llm_classifier.classify_with_llm) is only ever consulted on a
@@ -130,7 +131,7 @@ def classify_point_with_fallback(store, point_uri, rules: list[dict] | None = No
         return "llm", result.brick_class
 
 
-def reclassify(store, uri, rules: list[dict] | None = None) -> tuple[str, str | None]:
+def reclassify(store, uri, rules: list[MappingRule] | None = None) -> tuple[str, str | None]:
     """classify_point is deliberately pure-additive (existing callers rely
     on that), which means calling it twice for the same URI with a
     different result - a rules file change, a human correcting a mistake -

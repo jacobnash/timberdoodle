@@ -16,6 +16,18 @@ jobs:
       - run: pip install -e ".[dev,validate]"
       - run: pytest -m "not integration"
       - run: openapi-spec-validator openapi.yaml fault-api-openapi.yaml derivation-api-openapi.yaml validate-api-openapi.yaml auth-api-openapi.yaml
+      # ruff is still non-blocking (PLAN.md Stage 0.2) - baseline was 63,
+      # down to a handful of findings in files with in-flight feature
+      # work as of BASELINE.md's last update. Flip to blocking once it
+      # hits 0. mypy reached a genuine, permanent 0 (BASELINE.md) - blocking.
+      - run: ruff check src/ tests/
+        continue-on-error: true
+      - run: mypy src/timberdoodle
+      # Clone-detection is reporting-only (PLAN.md Guardrails) - alerts on
+      # new duplication without blocking; baseline is ~3.7% Python
+      # (BASELINE.md). Node is preinstalled on GitHub Actions runners.
+      - run: npx --yes jscpd@4 src/timberdoodle tests ui gateway/njs --min-lines 5 --min-tokens 40 --ignore "**/__pycache__/**"
+        continue-on-error: true
       # gateway/njs/ has no pytest equivalent - plain node runs the same
       # WebCrypto-based logic njs runs inside nginx (GitHub Actions
       # runners have Node preinstalled, no setup-node action needed).
@@ -48,6 +60,9 @@ jobs:
           echo "postgres never became healthy" >&2
           docker compose logs
           exit 1
-      - run: pytest -m "integration or not integration"
+      # Coverage is reporting-only for now (PLAN.md Stage 0.2/Guardrails) -
+      # baseline is 81% (BASELINE.md). No --cov-fail-under yet: the floor
+      # should ratchet up from a real baseline, not block on day one.
+      - run: pytest -m "integration or not integration" --cov=timberdoodle --cov-report=term-missing
       - if: always()
         run: docker compose logs

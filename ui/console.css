@@ -1,0 +1,107 @@
+/* Additive to style.css - shared by alarms.html and derivations.html: a
+   plain block layout (toolbar + table, or toolbar + form) instead of
+   index.html's two-column equipment-tree grid (style.css's bare `main`
+   selector), same override pattern devices.css uses for #devices-main. */
+
+.console-main {
+  display: block;
+  height: auto;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.console-main section { margin-bottom: 2rem; }
+.console-main h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+
+.toolbar { display: flex; align-items: center; gap: 0.75rem; margin: 0.5rem 0; }
+.toolbar label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.toolbar select { font: inherit; padding: 0.2rem; }
+
+.badge.severity-critical { --badge-color: var(--color-critical); }
+.badge.severity-warning { --badge-color: var(--color-warning); }
+.badge.severity-info { --badge-color: var(--muted); }
+.badge.fault-status-open { --badge-color: var(--color-critical); }
+.badge.fault-status-resolved { --badge-color: var(--color-success); }
+.badge.result-pass { --badge-color: var(--color-success); }
+.badge.result-fail { --badge-color: var(--color-critical); }
+
+td button { font-size: 0.8rem; margin: 0 0.15rem 0.15rem 0; }
+
+#editor-form label,
+#rule-form label { display: block; margin-bottom: 0.75rem; font-size: 0.85rem; }
+#editor-form textarea,
+#rule-form textarea,
+#editor-form input,
+#rule-form input,
+#editor-form select,
+#rule-form select {
+  display: block;
+  width: 100%;
+  max-width: 28rem;
+  margin-top: 0.3rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: inherit;
+  color: inherit;
+}
+#editor-form textarea,
+#rule-form textarea { max-width: none; }
+#editor-form fieldset,
+#rule-form fieldset { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0 0 1rem; padding: 0.75rem; }
+#editor-form legend,
+#rule-form legend { font-size: 0.8rem; color: var(--muted); padding: 0 0.3rem; }
+#editor-form input.invalid,
+#rule-form input.invalid { border-color: var(--color-critical); }
+
+/* Form/Raw JSON toggle - aria-pressed carries the actual state, this is
+   purely the visual reflection of it. */
+.mode-tab[aria-pressed="true"] { background: var(--border); font-weight: 600; }
+
+/* code-editor.js replaces textarea[data-editor-lang] with one of these -
+   sized/bordered to match the plain-textarea look above so a page with
+   JS disabled (or a slow/blocked CDN) degrades to a working, styled
+   textarea instead of a mismatched fallback. */
+.cm-editor {
+  margin-top: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  overflow: hidden;
+}
+.cm-editor.invalid { border-color: var(--color-critical); }
+.cm-editor .cm-scroller { font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow: auto; }
+.cm-editor.cm-focused { outline: none; }
+
+.result-pane {
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+}
+.result-pane.result-error { border-color: var(--color-critical); color: var(--color-critical); }
+
+.field-error { color: var(--color-critical); font-size: 0.75rem; margin: 0.25rem 0 0; }
+#editor-form textarea.invalid { border-color: var(--color-critical); }
+
+/* One card per "Run tests" test case: a small chart per named input
+   series plus a pass/fail badge and expected-vs-actual - see
+   derivations.js's renderTestResults(). */
+.test-case-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+.test-case-card h3 { margin: 0 0 0.5rem; font-size: 0.85rem; font-weight: 600; }
+.test-case-card p { margin: 0.4rem 0 0; font-size: 0.8rem; }
+.test-case-charts { display: flex; flex-wrap: wrap; gap: 1rem; }
+.test-case-charts figure { margin: 0; }
+.test-case-charts canvas { display: block; width: 220px; height: 70px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.test-case-charts figcaption { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; text-align: center; }

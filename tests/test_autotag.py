@@ -4,14 +4,24 @@ proves this works against the real store, not just the in-memory one).
 The injected fake llm_classify never touches the network - classify_point
 with_fallback's LLM step is a plain injected callable, so nothing here
 needs ANTHROPIC_API_KEY or the `anthropic` package installed.
+
+The run()-level tests below are plain unit tests (no store, no
+@pytest.mark.integration) - they monkeypatch find_unclassified/
+classify_point_with_fallback/load_rules/read_tags/propose_rule to drive
+run()'s own retry-loop and rule-proposal control flow directly. This is
+the code AUDIT.md flagged as 34% covered (CC 16) despite the module's
+other functions being well-tested - these characterize run() itself,
+not the classification logic it delegates to.
 """
 
 from dataclasses import dataclass
 
 import pytest
-from rdflib import Namespace
+import requests
+from rdflib import Namespace, URIRef
 
-from timberdoodle.autotag import find_unclassified
+from timberdoodle import autotag, llm_classifier, mapping
+from timberdoodle.autotag import find_unclassified, run
 from timberdoodle.ingest import ingest_tags
 from timberdoodle.mapping import classify_point_with_fallback
 from timberdoodle.remote_store import RemoteStore
@@ -30,7 +40,7 @@ class _FakeResult:
 @pytest.fixture
 def store():
     s = RemoteStore()
-    s._update(f'DELETE {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o . FILTER(STRSTARTS(STR(?s), "urn:point:test-autotag")) }}')
+    s._update('DELETE { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(STRSTARTS(STR(?s), "urn:point:test-autotag")) }')
     return s
 
 
@@ -77,3 +87,56 @@ def test_classify_point_with_fallback_ignores_low_confidence_llm_guess(store):
 
     assert (outcome, brick_class) == ("miss", None)
     assert not list(store.query(f"SELECT ?o WHERE {{ <{point_uri}> a <{BRICK.Chiller}> }}"))
+
+
+def test_run_skips_point_after_max_retries_on_connection_error(monkeypatch):
+    monkeypatch.setattr(autotag, "find_unclassified", lambda store: [URIRef("urn:point:test-retry-1")])
+
+    calls = []
+
+    def flaky_classify(store, uri, rules, llm_classify):
+        calls.append(uri)
+        raise requests.exceptions.ConnectionError("boom")
+
+    monkeypatch.setattr(mapping, "classify_point_with_fallback", flaky_classify)
+    monkeypatch.setattr(autotag, "_RETRY_DELAY_SECONDS", 0)
+
+    run(store=object(), llm_classify=None, propose_rules=False)  # must not raise
+
+    assert len(calls) == autotag._MAX_ATTEMPTS
+
+
+def test_run_skips_point_after_max_retries_on_unparseable_llm_response(monkeypatch):
+    """LLMClassificationError (AUDIT.md Theme D) is retried and skipped the
+    same as a network error, not left to crash the whole sweep."""
+    monkeypatch.setattr(autotag, "find_unclassified", lambda store: [URIRef("urn:point:test-retry-2")])
+
+    calls = []
+
+    def unparseable_classify(store, uri, rules, llm_classify):
+        calls.append(uri)
+        raise llm_classifier.LLMClassificationError("model returned no parsed output")
+
+    monkeypatch.setattr(mapping, "classify_point_with_fallback", unparseable_classify)
+    monkeypatch.setattr(autotag, "_RETRY_DELAY_SECONDS", 0)
+
+    run(store=object(), llm_classify=None, propose_rules=False)  # must not raise
+
+    assert len(calls) == autotag._MAX_ATTEMPTS
+
+
+def test_run_proposes_rule_when_llm_outcome_matches_a_known_class(monkeypatch):
+    point_uri = URIRef("urn:point:test-propose-1")
+    monkeypatch.setattr(autotag, "find_unclassified", lambda store: [point_uri])
+    monkeypatch.setattr(mapping, "load_rules", lambda path: [{"brick_class": "Chiller"}])
+    monkeypatch.setattr(mapping, "classify_point_with_fallback", lambda store, uri, rules, llm_classify: ("llm", "Chiller"))
+    monkeypatch.setattr(mapping, "read_tags", lambda store, uri: {"someRandomTag"})
+
+    proposed = []
+    monkeypatch.setattr(
+        llm_classifier, "propose_rule", lambda rules_path, tags, brick_class: proposed.append((rules_path, tags, brick_class)) or True
+    )
+
+    run(store=object(), llm_classify=None, propose_rules=True)
+
+    assert proposed == [(autotag.POINT_RULES_PATH, {"someRandomTag"}, "Chiller")]

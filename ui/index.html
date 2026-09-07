@@ -9,8 +9,18 @@
   <header>
     <h1>Timberdoodle</h1>
     <span id="status">connecting…</span>
+    <nav class="top-nav">
+      <a href="index.html">Equipment tree</a>
+      <a href="alarms.html">Alarms</a>
+      <a href="derivations.html">Derivations</a>
+      <a href="devices.html">Devices</a>
+    </nav>
   </header>
-  <div id="login-gate" class="login-gate" hidden>
+  <!-- auth.js decides which of these two is actually shown, via inline
+       style.display (not the `hidden` attribute - see auth.js's
+       showLoginGate/hideLoginGate for why). main starts hidden here so
+       there's no flash of tree/detail content before that decision runs. -->
+  <div id="login-gate" class="login-gate">
     <form id="login-form">
       <h2>Sign in</h2>
       <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
@@ -19,12 +29,14 @@
       <p id="login-error" class="hint" hidden></p>
     </form>
   </div>
-  <main id="main">
+  <main id="main" style="display: none">
     <nav id="tree" aria-label="Equipment and points"></nav>
     <section id="detail">
       <p class="hint">Select a point on the left to see its tags and history.</p>
     </section>
   </main>
+  <script src="auth.js"></script>
+  <script src="chart.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

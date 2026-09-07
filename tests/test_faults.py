@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from timberdoodle.faults import (
+    ack_fault,
     close_fault,
     enable_webhook,
     ensure_schema,
@@ -17,6 +18,7 @@ from timberdoodle.faults import (
     open_fault,
     record_webhook_failure,
     record_webhook_success,
+    snooze_fault,
 )
 from timberdoodle.timeseries import connect
 
@@ -87,6 +89,54 @@ def test_list_faults_filters_by_status(conn):
 
     open_only = list_faults(conn, status="open", rule_id="test-faults:range")
     assert {f["point_uri"] for f in open_only} == {"urn:point:test-faults:e"}
+
+
+@pytest.mark.integration
+def test_open_fault_defaults_severity_to_warning(conn):
+    open_fault(conn, "test-faults:sev-default", "urn:point:test-faults:g", datetime.now(timezone.utc))
+    fault = list_faults(conn, rule_id="test-faults:sev-default")[0]
+    assert fault["severity"] == "warning"
+
+
+@pytest.mark.integration
+def test_open_fault_stores_given_severity(conn):
+    open_fault(conn, "test-faults:sev-critical", "urn:point:test-faults:h", datetime.now(timezone.utc), severity="critical")
+    fault = list_faults(conn, rule_id="test-faults:sev-critical")[0]
+    assert fault["severity"] == "critical"
+
+
+@pytest.mark.integration
+def test_ack_fault_sets_acked_at_and_by(conn):
+    now = datetime.now(timezone.utc)
+    fault_id = open_fault(conn, "test-faults:ack", "urn:point:test-faults:i", now)
+
+    assert ack_fault(conn, fault_id, "alice@example.com", now) is True
+
+    fault = list_faults(conn, rule_id="test-faults:ack")[0]
+    assert fault["acked_by"] == "alice@example.com"
+    assert fault["acked_at"] is not None
+
+
+@pytest.mark.integration
+def test_ack_fault_on_missing_id_returns_false(conn):
+    assert ack_fault(conn, 999999999, "alice@example.com", datetime.now(timezone.utc)) is False
+
+
+@pytest.mark.integration
+def test_snooze_fault_sets_snoozed_until(conn):
+    now = datetime.now(timezone.utc)
+    fault_id = open_fault(conn, "test-faults:snooze", "urn:point:test-faults:j", now)
+    until = now + timedelta(minutes=30)
+
+    assert snooze_fault(conn, fault_id, until) is True
+
+    fault = list_faults(conn, rule_id="test-faults:snooze")[0]
+    assert fault["snoozed_until"] is not None
+
+
+@pytest.mark.integration
+def test_snooze_fault_on_missing_id_returns_false(conn):
+    assert snooze_fault(conn, 999999999, datetime.now(timezone.utc) + timedelta(minutes=5)) is False
 
 
 @pytest.mark.integration

@@ -9,17 +9,19 @@ from http.server import ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import quote
 
-import jsonschema
 import pytest
 import requests
 import yaml
+from conftest import assert_matches_schema, load_spec
 from openapi_spec_validator import validate
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
 
 from timberdoodle import derivation_health
 from timberdoodle.derivation_api import OPENAPI_SPEC_PATH, make_handler
-from timberdoodle.ingest import link_point_to_equip, topic_prefix_to_equip_uri, topic_to_point_uri
+from timberdoodle.ingest import (
+    link_point_to_equip,
+    topic_prefix_to_equip_uri,
+    topic_to_point_uri,
+)
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.timeseries import connect_pool, read_latest, write_point_value
 
@@ -29,21 +31,11 @@ GATEWAY_SECRET = "test-gateway-secret"
 
 @pytest.fixture(scope="module")
 def spec() -> dict:
-    with open(OPENAPI_SPEC_PATH) as f:
-        return yaml.safe_load(f)
+    return load_spec(OPENAPI_SPEC_PATH)
 
 
 def test_spec_is_well_formed_openapi(spec):
     validate(spec)
-
-
-def _assert_matches_schema(instance, schema: dict, spec: dict) -> None:
-    resource = Resource.from_contents(spec, default_specification=DRAFT202012)
-    registry = Registry().with_resource(uri="spec", resource=resource)
-    if "$ref" in schema and schema["$ref"].startswith("#"):
-        schema = {"$ref": f"spec{schema['$ref']}"}
-    validator_cls = jsonschema.validators.validator_for(schema)
-    validator_cls(schema, registry=registry).validate(instance)
 
 
 @pytest.fixture(scope="module")
@@ -148,7 +140,7 @@ def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(
     create_resp = gw.post(f"{live_server}/derivations", json=body)
     assert create_resp.status_code == 201
     derivation = create_resp.json()
-    _assert_matches_schema(derivation, spec["paths"]["/derivations"]["post"]["responses"]["201"]["content"]["application/json"]["schema"], spec)
+    assert_matches_schema(derivation, spec["paths"]["/derivations"]["post"]["responses"]["201"]["content"]["application/json"]["schema"], spec)
 
     list_resp = gw.get(f"{live_server}/derivations")
     assert list_resp.status_code == 200
@@ -170,9 +162,27 @@ def test_full_derivation_test_dryrun_and_target_flow_matches_documented_schemas(
     assert targets_resp.status_code == 200
     assert targets_resp.json() == []  # dry-run doesn't touch target health either
 
+    # Enabling a target with no recorded health row (never failed or
+    # succeeded - dry-run doesn't touch target health, per above) 404s -
+    # there's nothing to enable. Seed a real row the way a genuine
+    # non-dry-run evaluation would (record_target_failure) to exercise
+    # the actual documented 200/TargetHealth response.
+    enable_missing_resp = gw.post(f"{live_server}/derivations/{derivation['id']}/targets/{quote(str(equip), safe='')}/enable")
+    assert enable_missing_resp.status_code == 404
+
+    with ts_pool.connection() as conn:
+        derivation_health.record_target_failure(conn, derivation["id"], str(equip), "seeded failure")
+
     enable_resp = gw.post(f"{live_server}/derivations/{derivation['id']}/targets/{quote(str(equip), safe='')}/enable")
     assert enable_resp.status_code == 200
-    assert enable_resp.json()["disabled"] is False
+    enabled = enable_resp.json()
+    assert enabled["disabled"] is False
+    assert enabled["consecutive_failures"] == 0
+    assert_matches_schema(
+        enabled,
+        spec["paths"]["/derivations/{id}/targets/{target}/enable"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
+        spec,
+    )
 
     delete_resp = gw.delete(f"{live_server}/derivations/{derivation['id']}")
     assert delete_resp.status_code == 204

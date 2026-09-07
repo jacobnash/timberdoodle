@@ -6,11 +6,15 @@ become one AHU" flow tying ingest_equip_tags + link_point_to_equip +
 classify_point together.
 """
 
+import pytest
 from rdflib import RDF, Graph
 
-import pytest
-
-from timberdoodle.ingest import ingest_equip_tags, ingest_tags, link_point_to_equip, topic_prefix_to_equip_uri
+from timberdoodle.ingest import (
+    ingest_equip_tags,
+    ingest_tags,
+    link_point_to_equip,
+    topic_prefix_to_equip_uri,
+)
 from timberdoodle.mapping import classify_point, load_rules
 from timberdoodle.store import BRICK, Store
 

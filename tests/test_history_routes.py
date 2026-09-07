@@ -6,19 +6,19 @@ actually matches what the spec claims.
 """
 
 import time
+from http.server import ThreadingHTTPServer
+from threading import Thread
 
+import jsonschema
 import pytest
 import requests
 import yaml
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
-import jsonschema
 
 from timberdoodle.ingest_api import OPENAPI_SPEC_PATH, make_handler
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.timeseries import connect_pool
-from http.server import ThreadingHTTPServer
-from threading import Thread
 
 
 @pytest.fixture(scope="module")

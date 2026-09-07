@@ -109,7 +109,7 @@ def test_invalid_token_is_401(org_and_admin_token):
 
 @pytest.mark.integration
 def test_viewer_role_gets_403_on_admin_only_route(org_and_admin_token):
-    org, admin_token = org_and_admin_token
+    _org, admin_token = org_and_admin_token
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
     user_resp = requests.post(
         f"{BASE}/auth/users", headers=admin_headers,
@@ -147,7 +147,7 @@ def test_revoked_api_key_is_rejected_after_one_poll_interval(org_and_admin_token
     the actual end-to-end mechanism: revoke via HTTP -> auth_api writes
     revoked_tokens -> gateway's periodic poll picks it up ->
     subsequent requests with that token 401."""
-    org, admin_token = org_and_admin_token
+    _org, admin_token = org_and_admin_token
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
     key_resp = requests.post(f"{BASE}/auth/api-keys", headers=admin_headers, json={"role": "service"})
@@ -179,7 +179,7 @@ def test_role_ordinal_gating_across_routes_and_roles(org_and_admin_token):
     before it (this file alone, or the full suite with test_e2e_journey.py
     also spending some of the same budget), so a fixed sleep tuned for
     one scenario silently breaks in the other."""
-    org, admin_token = org_and_admin_token
+    _org, admin_token = org_and_admin_token
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
     viewer_resp = requests.post(

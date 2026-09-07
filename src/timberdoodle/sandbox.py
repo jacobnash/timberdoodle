@@ -22,8 +22,10 @@ A plain daemon=True thread doesn't have that problem.
 import ast
 import builtins
 import threading
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
+
+from timberdoodle.schemas import TestCaseResult
 
 
 class SandboxError(Exception):
@@ -70,7 +72,7 @@ def compile_fn(source: str) -> Callable:
 
     namespace = {"__builtins__": SAFE_BUILTINS}
     try:
-        exec(compile(tree, "<derivation fn_source>", "exec"), namespace)
+        exec(compile(tree, "<derivation fn_source>", "exec"), namespace)  # noqa: S102 - this whole module exists to run arbitrary fn_source safely; _validate_ast already ran, see module docstring
     except SandboxError:
         raise
     except Exception as exc:
@@ -96,7 +98,7 @@ def run_with_timeout(fn: Callable, *args, timeout_seconds: float = 5, **kwargs):
     def _target():
         try:
             outcome["value"] = fn(*args, **kwargs)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - fn is arbitrary sandboxed user code; any exception type must be captured and reported back to the caller, not just a predictable subset
             outcome["error"] = exc
 
     thread = threading.Thread(target=_target, daemon=True)
@@ -127,12 +129,12 @@ def _parse_test_inputs(inputs):
     return [_parse_series(series) for series in inputs]
 
 
-def run_test_cases(fn: Callable, test_cases: list[dict]) -> list[dict]:
+def run_test_cases(fn: Callable, test_cases: list[dict]) -> list[TestCaseResult]:
     """Runs every declared test case through fn under the same timeout as
     live evaluation. Never raises - a case that errors is reported as a
     failure, not an exception, so callers can present every case's outcome
     at once instead of stopping at the first one."""
-    results = []
+    results: list[TestCaseResult] = []
     for case in test_cases:
         expected = case["expected"]
         try:

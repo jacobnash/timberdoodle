@@ -16,13 +16,16 @@ envelope `mqtt_listener.py` and `POST /ingest` both consume.
 cp .env.example .env                                                     # first time only, see below
 echo "TIMBERDOODLE_JWT_SECRET=$(openssl rand -hex 32)" >> .env           # first time only
 echo "TIMBERDOODLE_GATEWAY_SECRET=$(openssl rand -hex 32)" >> .env       # first time only
+echo "MQTT_PASSWORD=$(openssl rand -hex 16)" >> .env                     # first time only
 docker compose up -d --wait   # waits for the 5 HTTP APIs' healthchecks, not just "container started"
 ```
 
-`docker compose up -d` refuses to start the gateway without both of
-those two secrets set — every route goes through real JWT verification
-in nginx itself now (see "Gateway auth" below), so there's no working
-default the way there is for everything else in `.env.example`, which
+`docker compose up -d` refuses to start the gateway without both JWT/
+gateway secrets set, and refuses to start mosquitto or any MQTT-connected
+daemon without `MQTT_PASSWORD` — every route goes through real JWT
+verification in nginx itself now (see "Gateway auth" below), and every
+MQTT client authenticates now too (see `mosquitto/acl`), so there's no
+working default the way there is for everything else in `.env.example`, which
 lists every other environment variable any part of this repo reads,
 each annotated with its default and which process needs it. Postgres's
 password specifically comes from `POSTGRES_PASSWORD` in `.env` (defaults
@@ -39,6 +42,18 @@ until all 5 HTTP APIs report healthy (`GET /openapi.yaml` on each), so
 `docker compose up -d --wait` (or plain `up -d` followed by `docker
 compose ps`) leaves you with a stack that's actually ready for the curl
 examples below, not just "containers exist."
+
+**If any `docker compose up -d` recreates a backend container while
+`gateway` itself keeps running from before** (a rebuild, a `git pull`, a
+targeted `--build ingest_api`, or just re-running `up -d` on a stack
+that already had some containers up) — run `docker compose restart
+gateway` afterward. The gateway resolves and caches each backend's
+address at its own nginx startup, not per-request, so it can end up
+routing to a since-recreated container's stale address and return
+404/502 on every route even though every backend reports healthy. This
+isn't limited to the "restart one service on purpose" case — it's
+happened from a plain repeat `docker compose up -d` in this repo's own
+CI/dev loop. `docker compose restart gateway` always fixes it.
 
 | Process | What it does | Port (direct) |
 |---|---|---|
@@ -115,7 +130,8 @@ python -m fbf.mock_hospital generate --out hospital_site_spec.json   # one-shot:
 
 # each in its own long-running terminal:
 python -m fbf.mock_device --address <your-iface>/24:47808 --instance 3456 --site-spec hospital_site_spec.json   # simulated BACnet device
-python -m fbf.api --address <your-iface>/24:47820 --mqtt-host localhost   # discovery/connections API, publishes to MQTT
+MQTT_USERNAME=timberdoodle MQTT_PASSWORD=<your .env's MQTT_PASSWORD> \
+  python -m fbf.api --address <your-iface>/24:47820 --mqtt-host localhost   # discovery/connections API, publishes to MQTT
 
 # one-shot, once both of the above are up:
 python -m fbf.mock_hospital provision --device-address <your-iface>:47808 --device-instance 3456   # provisions one connection per equipment
@@ -148,7 +164,8 @@ existing admin account — create one first with `POST /auth/orgs` (see
 - a dashboard for FBF's periodic BACnet/Modbus device discovery: review
 discovered devices, set per-device credentials, and provision connections,
 all via direct browser calls to `fbf.api` (see
-`../fbf/docs/periodic-discovery-and-credentials.md`). Pass `?fbf=<url>` if
+[`docs-site/pages/fbf-periodic-discovery.mdx`](docs-site/pages/fbf-periodic-discovery.mdx)).
+Pass `?fbf=<url>` if
 `fbf.api` isn't on the default `localhost:8001`.
 
 `autotag.py` sweeps every point/equip with tags but no direct Brick match,
@@ -239,10 +256,34 @@ either documents `--compose-project-dir`/`--oxigraph-url`/`--out-dir` for
 pointing at a different target (e.g. a throwaway container while testing
 restore, rather than the live stack).
 
+### Automating backups
+
+Nothing runs `backup.py` on its own — pick one:
+
+```bash
+# systemd (recommended on a Linux host)
+sudo cp scripts/systemd/timberdoodle-backup.{service,timer} /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/timberdoodle-backup.service   # set WorkingDirectory=
+sudo systemctl enable --now timberdoodle-backup.timer
+```
+
+```bash
+# cron (non-systemd hosts)
+0 3 * * * cd /path/to/timberdoodle && python3 scripts/backup.py >> backups/backup.log 2>&1
+```
+
+Both just call the same `backup.py` shown above on a schedule (default:
+daily) — nothing about the script changes. Backups accumulate in
+`backups/` indefinitely; there's no pruning/retention yet, so watch disk
+usage or clean the directory out yourself if that becomes a problem. See
+[`docs-site/pages/backups.mdx`](docs-site/pages/backups.mdx) for the full
+picture.
+
 ## Tests
 
 ```bash
 pip install -e ".[dev]"                                # first time only: pytest + the OpenAPI-spec-validation deps
+set -a && source .env && set +a                        # mosquitto requires auth now - tests need the same MQTT_USERNAME/MQTT_PASSWORD as the containers
 python -m pytest -m "integration or not integration"  # everything; requires `docker compose up -d` first
 python -m pytest -m "not integration"                  # unit tests only, no services needed
 ```

@@ -104,7 +104,7 @@ def test_create_user_adds_a_user_to_an_existing_org(conn):
 
 @pytest.mark.integration
 def test_user_site_ids_empty_by_default(conn):
-    org = create_org(conn, "Test Org 3", "admin3@test-auth.invalid", "pw")
+    create_org(conn, "Test Org 3", "admin3@test-auth.invalid", "pw")
     user = get_user_by_email(conn, "admin3@test-auth.invalid")
     assert user_site_ids(conn, user["id"]) == []
 

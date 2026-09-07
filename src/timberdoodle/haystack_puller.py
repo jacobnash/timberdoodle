@@ -23,7 +23,11 @@ from datetime import datetime, timezone
 
 from timberdoodle import mapping, tracing
 from timberdoodle.haystack_client import HaystackClient
-from timberdoodle.haystack_pull_state import ensure_schema, get_checkpoint, set_checkpoint
+from timberdoodle.haystack_pull_state import (
+    ensure_schema,
+    get_checkpoint,
+    set_checkpoint,
+)
 from timberdoodle.ingest import (
     ingest_haystack_equip_tags,
     ingest_reading,
@@ -152,7 +156,7 @@ def main() -> None:
     while True:
         try:
             pull_once(client, store, ts_conn, args.source_id, args.point_filter, args.equip_filter, args.backfill_days)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one bad tick must not kill the daemon; logged below
             # A single bad tick (remote server hiccup, transient auth
             # failure) shouldn't kill the daemon - next tick tries again.
             print(f"pull cycle failed: {exc!r}")

@@ -31,14 +31,15 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
-import paho.mqtt.client as mqtt
 from rdflib import URIRef
 
-from timberdoodle import derivation_health, json_store, sandbox, timeseries, tracing
+from timberdoodle import derivation_health, json_store, mqtt_util, sandbox, timeseries, tracing
 from timberdoodle.faults import list_faults
 from timberdoodle.ingest import link_point_to_equip, topic_to_point_uri
 from timberdoodle.remote_store import RemoteStore
+from timberdoodle.schemas import Derivation, TraceEntry
 from timberdoodle.store import BRICK, TD
 
 tracer = tracing.get_tracer(__name__)
@@ -107,7 +108,50 @@ def _write_and_attach(store, ts_conn, output_uri: str, target_uri: str, value, n
         span.set_attribute("derived_from", input_uris)
 
 
-def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict, now: datetime, dry_run: bool, trigger_point_uri: str | None = None) -> list[dict]:
+def _record_target_failure(health_conn, derivation_id: str, target_uri: str, dry_run: bool, exc: Exception, span) -> TraceEntry:
+    """Shared by _evaluate_formula's and _walk_rollup_tree's per-target
+    except clauses - only the exception-raising computation itself
+    differs between formula and rollup, everything after "it failed" is
+    identical bookkeeping."""
+    span.set_attribute("error", str(exc))
+    if health_conn is not None and not dry_run:
+        derivation_health.record_target_failure(health_conn, derivation_id, target_uri, str(exc))
+    return {"target": target_uri, "error": str(exc)}
+
+
+def _record_and_trace_success(
+    store, ts_conn, health_conn, derivation_id: str, target_uri: str, output_cfg: dict,
+    now: datetime, dry_run: bool, value, derived_from: list[str], span,
+) -> TraceEntry:
+    """Shared by _evaluate_formula's and _walk_rollup_tree's post-compute
+    handling: record the health outcome, build the matching trace entry,
+    and write+attach the result if it's not None and dry_run is False."""
+    if health_conn is not None and not dry_run:
+        derivation_health.record_target_success(health_conn, derivation_id, target_uri)
+
+    span.set_attribute("computed_value", "" if value is None else str(value))
+    if value is None:
+        return {"target": target_uri, "computed_value": None}
+
+    output_uri = _output_uri(derivation_id, target_uri)
+    if not dry_run:
+        _write_and_attach(store, ts_conn, output_uri, target_uri, value, now, output_cfg, derived_from, span=span)
+    return {
+        "target": target_uri, "computed_value": value,
+        "would_write_uri": output_uri, "would_attach_to": target_uri,
+        "would_derive_from": derived_from,
+    }
+
+
+def _read_formula_inputs(ts_conn, fault_conn, input_uris: dict[str, str], input_windows: dict, window_seconds: float, now: datetime) -> dict[str, list[tuple]]:
+    inputs = {}
+    for name, point_uri in input_uris.items():
+        window = input_windows.get(name, window_seconds)
+        inputs[name] = _read_input_series(ts_conn, fault_conn, point_uri, now - timedelta(seconds=window), now)
+    return inputs
+
+
+def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: Derivation, now: datetime, dry_run: bool, trigger_point_uri: str | None = None) -> list[TraceEntry]:
     fn = sandbox.compile_fn(derivation["fn_source"])
     derivation_id = derivation["id"]
     target_var = derivation["target_var"]
@@ -117,7 +161,7 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict,
     input_windows = derivation.get("input_windows") or {}
     output_cfg = derivation.get("output", {})
 
-    trace = []
+    trace: list[TraceEntry] = []
     rows = list(store.query(derivation["select"]))
     for row in rows:
         target_uri = str(getattr(row, target_var))
@@ -132,40 +176,40 @@ def _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation: dict,
             span.set_attribute("derivation_id", derivation_id)
             span.set_attribute("target", target_uri)
             try:
-                inputs = {}
-                for name, point_uri in input_uris.items():
-                    window = input_windows.get(name, window_seconds)
-                    inputs[name] = _read_input_series(ts_conn, fault_conn, point_uri, now - timedelta(seconds=window), now)
+                inputs = _read_formula_inputs(ts_conn, fault_conn, input_uris, input_windows, window_seconds, now)
                 row_extra = {name: str(getattr(row, name)) for name in extra_vars}
                 value = sandbox.run_with_timeout(fn, inputs, row_extra)
-            except Exception as exc:
-                span.set_attribute("error", str(exc))
-                if health_conn is not None and not dry_run:
-                    derivation_health.record_target_failure(health_conn, derivation_id, target_uri, str(exc))
-                trace.append({"target": target_uri, "error": str(exc)})
+            except Exception as exc:  # noqa: BLE001 - one target's sandboxed formula failing must not stop evaluation of every other target
+                trace.append(_record_target_failure(health_conn, derivation_id, target_uri, dry_run, exc, span))
                 continue
 
-            if health_conn is not None and not dry_run:
-                derivation_health.record_target_success(health_conn, derivation_id, target_uri)
-
-            span.set_attribute("computed_value", "" if value is None else str(value))
-            if value is None:
-                trace.append({"target": target_uri, "computed_value": None})
-                continue
-
-            output_uri = _output_uri(derivation_id, target_uri)
-            trace.append({
-                "target": target_uri, "computed_value": value,
-                "would_write_uri": output_uri, "would_attach_to": target_uri,
-                "would_derive_from": list(input_uris.values()),
-            })
-            if not dry_run:
-                _write_and_attach(store, ts_conn, output_uri, target_uri, value, now, output_cfg, list(input_uris.values()), span=span)
+            trace.append(_record_and_trace_success(
+                store, ts_conn, health_conn, derivation_id, target_uri, output_cfg,
+                now, dry_run, value, list(input_uris.values()), span,
+            ))
 
     return trace
 
 
-def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict, root: str, now: datetime, dry_run: bool) -> list[dict]:
+def _rollup_node_inputs(
+    store, ts_conn, fault_conn, derivation_id: str, node: str, leaf_class: str,
+    edges: dict[str, list[str]], values: dict[str, object], window_start: datetime, now: datetime,
+) -> tuple[list, list[str]]:
+    """A node's own directly-attached leaf points, plus each already-
+    evaluated child's own computed value folded in as a synthetic
+    one-point series - see _walk_rollup_tree's module docstring on why
+    a rollup node needs both."""
+    leaf_uris = [str(r.p) for r in store.query(f"{_PREFIXES}SELECT ?p WHERE {{ <{node}> brick:hasPoint ?p . ?p a {leaf_class} }}")]
+    child_series = [_read_input_series(ts_conn, fault_conn, p, window_start, now) for p in leaf_uris]
+    child_uris = list(leaf_uris)
+    for child in edges.get(node, []):
+        if values.get(child) is not None:
+            child_series.append([(now, values[child])])
+            child_uris.append(_output_uri(derivation_id, child))
+    return child_series, child_uris
+
+
+def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: Derivation, root: str, now: datetime, dry_run: bool) -> list[TraceEntry]:
     derivation_id = derivation["id"]
     part_rel = derivation["part_relationship"]
     leaf_class = derivation["leaf_point_class"]
@@ -187,7 +231,7 @@ def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict,
 
     order = _topological_order(edges)  # children before parents
 
-    trace: list[dict] = []
+    trace: list[TraceEntry] = []
     values: dict[str, object] = {}
     window_start = now - timedelta(seconds=window_seconds)
 
@@ -199,52 +243,31 @@ def _walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation: dict,
             span.set_attribute("derivation_id", derivation_id)
             span.set_attribute("target", node)
             try:
-                leaf_uris = [str(r.p) for r in store.query(f"{_PREFIXES}SELECT ?p WHERE {{ <{node}> brick:hasPoint ?p . ?p a {leaf_class} }}")]
-                child_series = [_read_input_series(ts_conn, fault_conn, p, window_start, now) for p in leaf_uris]
-                child_uris = list(leaf_uris)
-                for child in edges.get(node, []):
-                    if values.get(child) is not None:
-                        child_series.append([(now, values[child])])
-                        child_uris.append(_output_uri(derivation_id, child))
+                child_series, child_uris = _rollup_node_inputs(store, ts_conn, fault_conn, derivation_id, node, leaf_class, edges, values, window_start, now)
                 value = sandbox.run_with_timeout(fn, child_series, {"node": node})
-            except Exception as exc:
-                span.set_attribute("error", str(exc))
-                if health_conn is not None and not dry_run:
-                    derivation_health.record_target_failure(health_conn, derivation_id, node, str(exc))
-                trace.append({"target": node, "error": str(exc)})
+            except Exception as exc:  # noqa: BLE001 - one node's sandboxed rollup failing must not stop evaluation of every other node
+                trace.append(_record_target_failure(health_conn, derivation_id, node, dry_run, exc, span))
                 values[node] = None
                 continue
 
-            if health_conn is not None and not dry_run:
-                derivation_health.record_target_success(health_conn, derivation_id, node)
-
             values[node] = value
-            span.set_attribute("computed_value", "" if value is None else str(value))
-            if value is None:
-                trace.append({"target": node, "computed_value": None})
-                continue
-
-            output_uri = _output_uri(derivation_id, node)
-            trace.append({
-                "target": node, "computed_value": value,
-                "would_write_uri": output_uri, "would_attach_to": node,
-                "would_derive_from": child_uris,
-            })
-            if not dry_run:
-                _write_and_attach(store, ts_conn, output_uri, node, value, now, output_cfg, child_uris, span=span)
+            trace.append(_record_and_trace_success(
+                store, ts_conn, health_conn, derivation_id, node, output_cfg,
+                now, dry_run, value, child_uris, span,
+            ))
 
     return trace
 
 
-def _evaluate_rollup(store, ts_conn, fault_conn, health_conn, derivation: dict, now: datetime, dry_run: bool) -> list[dict]:
+def _evaluate_rollup(store, ts_conn, fault_conn, health_conn, derivation: Derivation, now: datetime, dry_run: bool) -> list[TraceEntry]:
     roots = [str(row.root) for row in store.query(derivation["root_select"])]
-    trace = []
+    trace: list[TraceEntry] = []
     for root in roots:
         trace.extend(_walk_rollup_tree(store, ts_conn, fault_conn, health_conn, derivation, root, now, dry_run))
     return trace
 
 
-def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: list[dict], now: datetime | None = None, dry_run: bool = False, only_ids: set[str] | None = None) -> list[dict]:
+def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: list[Derivation], now: datetime | None = None, dry_run: bool = False, only_ids: set[str] | None = None) -> list[TraceEntry]:
     """Importable/synchronous - tests and --dry-run both call this
     directly. `only_ids`, when given, evaluates only those derivations
     (for per-derivation interval_seconds scheduling) while still ordering
@@ -258,7 +281,7 @@ def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: l
     if only_ids is not None:
         order = [did for did in order if did in only_ids]
 
-    trace: list[dict] = []
+    trace: list[TraceEntry] = []
     for derivation_id in order:
         derivation = by_id[derivation_id]
         with tracer.start_as_current_span("derivation_engine.evaluate") as span:
@@ -268,7 +291,7 @@ def evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations: l
             try:
                 rows = _evaluate_rollup(store, ts_conn, fault_conn, health_conn, derivation, now, dry_run) if kind == "rollup" \
                     else _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation, now, dry_run)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one derivation failing (bad SPARQL, sandboxed code) must not stop the whole sweep
                 span.set_attribute("error", str(exc))
                 continue
             span.set_attribute("target_count", len(rows))
@@ -286,7 +309,7 @@ def make_on_message(store, ts_conn, fault_conn, health_conn, cache: json_store.R
     def on_message(client, userdata, msg):
         topic = msg.topic
         point_uri = str(topic_to_point_uri(topic))
-        for derivation in cache.get():
+        for derivation in cast(list[Derivation], cache.get()):
             glob = derivation.get("applies_to_topic_glob")
             if not glob or derivation.get("kind") == "rollup" or not fnmatch.fnmatch(topic, glob):
                 continue
@@ -295,7 +318,7 @@ def make_on_message(store, ts_conn, fault_conn, health_conn, cache: json_store.R
                 span.set_attribute("topic", topic)
                 try:
                     _evaluate_formula(store, ts_conn, fault_conn, health_conn, derivation, datetime.now(timezone.utc), dry_run=False, trigger_point_uri=point_uri)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - one MQTT-triggered derivation failing must not crash the listener callback
                     span.set_attribute("error", str(exc))
 
     return on_message
@@ -324,14 +347,14 @@ def main() -> None:
     cache = json_store.RuleCache(args.derivations_file)
 
     if args.dry_run:
-        derivations = cache.get()
+        derivations = cast(list[Derivation], cache.get())
         if args.derivation_id:
             derivations = [d for d in derivations if d["id"] == args.derivation_id]
         for entry in evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations, dry_run=True):
             print(json.dumps(entry, default=str))
         return
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt_util.make_client()
     client.on_message = make_on_message(store, ts_conn, fault_conn, health_conn, cache)
     client.connect(args.mqtt_host, args.mqtt_port)
     client.subscribe("#")  # per-derivation applies_to_topic_glob is the real filter, applied in on_message
@@ -342,7 +365,7 @@ def main() -> None:
     try:
         while True:
             now = datetime.now(timezone.utc)
-            derivations = cache.get()
+            derivations = cast(list[Derivation], cache.get())
             due_ids = {d["id"] for d in derivations if now >= next_run.get(d["id"], now)}
             if due_ids:
                 evaluate_derivations(store, ts_conn, fault_conn, health_conn, derivations, now=now, dry_run=False, only_ids=due_ids)

@@ -1,11 +1,15 @@
 from dataclasses import dataclass
 
+import pytest
 from rdflib import RDF, RDFS, SKOS, Graph, Literal, Namespace
 
-import pytest
-
 from timberdoodle.ingest import ingest_tags
-from timberdoodle.mapping import classify_point, classify_point_with_fallback, load_rules, reclassify
+from timberdoodle.mapping import (
+    classify_point,
+    classify_point_with_fallback,
+    load_rules,
+    reclassify,
+)
 from timberdoodle.store import BRICK, PROJ, TD, Store
 
 BLDG = Namespace("urn:test-mapping#")
@@ -69,6 +73,22 @@ def test_classify_point_direct_match_survives_real_structural_extras(rule):
     assert (outcome, matched) == ("direct", rule["brick_class"])
 
 
+def test_classify_point_defaults_to_load_rules_when_rules_omitted():
+    """AUDIT.md/mutmut: every other test here passes rules=RULES explicitly,
+    so classify_point's `if rules is None: rules = load_rules()` fallback
+    (mapping.py:59-60) had 100% line coverage but zero mutation coverage -
+    deleting the load_rules() call entirely still passed every test. This
+    calls classify_point with rules genuinely omitted to actually exercise
+    that default."""
+    rule = RULES[0]
+    store = Store()
+    point_uri = ingest_tags(store, "test-mapping:default-rules-path", {t: True for t in rule["tags"]})
+
+    outcome, matched = classify_point(store, point_uri)
+
+    assert (outcome, matched) == ("direct", rule["brick_class"])
+
+
 def test_classify_point_falls_back_to_proj_for_partial_overlap():
     """Shares zone/air/sensor with the temp-sensor rule but has `tvoc`
     (a real Haystack marker - phScience/lib/air.trio) instead of `temp` -
@@ -122,7 +142,7 @@ def test_reclassify_from_direct_to_fallback_removes_old_direct_type():
     assert (point_uri, RDF.type, BRICK.Zone_Air_Temperature_Sensor) in store.graph
 
     # reclassify against the real rules, where this tag combo is only a fallback
-    outcome, matched = reclassify(store, point_uri, rules=RULES)
+    outcome, _matched = reclassify(store, point_uri, rules=RULES)
 
     assert outcome == "fallback"
     assert (point_uri, RDF.type, BRICK.Zone_Air_Temperature_Sensor) not in store.graph

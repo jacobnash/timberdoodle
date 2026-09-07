@@ -12,6 +12,8 @@ human clears it via enable_target().
 
 import psycopg
 
+from timberdoodle.schemas import TargetHealth
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS derivation_target_health (
     derivation_id         TEXT NOT NULL,
@@ -42,7 +44,7 @@ def record_target_failure(conn: psycopg.Connection, derivation_id: str, target_u
         """,
         (derivation_id, target_uri, error),
     ).fetchone()
-    failures = row[0]
+    failures = row[0]  # type: ignore[index]  # INSERT...ON CONFLICT DO UPDATE...RETURNING always returns exactly one row; mypy/psycopg's typing can't express that SQL guarantee
     if failures >= disable_threshold:
         conn.execute(
             "UPDATE derivation_target_health SET disabled = TRUE WHERE derivation_id = %s AND target_uri = %s",
@@ -71,14 +73,25 @@ def is_target_disabled(conn: psycopg.Connection, derivation_id: str, target_uri:
     return bool(row[0]) if row else False
 
 
-def enable_target(conn: psycopg.Connection, derivation_id: str, target_uri: str) -> None:
-    conn.execute(
-        "UPDATE derivation_target_health SET disabled = FALSE, consecutive_failures = 0 WHERE derivation_id = %s AND target_uri = %s",
+def enable_target(conn: psycopg.Connection, derivation_id: str, target_uri: str) -> TargetHealth | None:
+    """None if this (derivation_id, target_uri) has no recorded health row
+    at all (never failed or succeeded yet, or a typo'd target) - a plain
+    UPDATE...WHERE, not INSERT...ON CONFLICT, so unlike open_fault/
+    ack_fault/snooze_fault this one genuinely can match zero rows."""
+    row = conn.execute(
+        """
+        UPDATE derivation_target_health SET disabled = FALSE, consecutive_failures = 0
+        WHERE derivation_id = %s AND target_uri = %s
+        RETURNING target_uri, consecutive_failures, disabled, last_error
+        """,
         (derivation_id, target_uri),
-    )
+    ).fetchone()
+    if row is None:
+        return None
+    return {"target_uri": row[0], "consecutive_failures": row[1], "disabled": row[2], "last_error": row[3]}
 
 
-def list_targets(conn: psycopg.Connection, derivation_id: str) -> list[dict]:
+def list_targets(conn: psycopg.Connection, derivation_id: str) -> list[TargetHealth]:
     rows = conn.execute(
         "SELECT target_uri, consecutive_failures, disabled, last_error FROM derivation_target_health WHERE derivation_id = %s ORDER BY target_uri",
         (derivation_id,),

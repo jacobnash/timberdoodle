@@ -10,6 +10,8 @@ import sys
 import types
 from dataclasses import dataclass
 
+import pytest
+
 from timberdoodle import llm_classifier
 
 
@@ -49,6 +51,17 @@ def test_classify_with_llm_returns_parsed_result(monkeypatch):
     assert result.brick_class == "Chiller"
     assert result.confidence == 0.85
     assert result.reasoning == "chw supply/return pair"
+
+
+def test_classify_with_llm_raises_on_unparseable_response(monkeypatch):
+    """AUDIT.md Theme D: response.parsed_output is None whenever the SDK
+    can't parse the model's output into _ClassificationSchema - accessing
+    .brick_class on it directly used to raise an unhandled AttributeError.
+    Confirms it now raises a clear, catchable error instead."""
+    _install_fake_anthropic(monkeypatch, parsed_output=None)
+
+    with pytest.raises(llm_classifier.LLMClassificationError):
+        llm_classifier.classify_with_llm(tags={"chw"}, label="fbf/chiller-1/CHW-Sup-Temp", description=None, existing_brick_classes=[])
 
 
 def test_propose_rule_appends_a_new_proposal(tmp_path):

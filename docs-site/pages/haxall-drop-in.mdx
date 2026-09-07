@@ -12,9 +12,13 @@ exactly this: `hx::IHisExt`. A small Fantom library
 (`~/timberdoodle/fantom-his-ext/`) implements it and forwards reads/writes
 to this API's [`/history` endpoints](/api/ingest) over plain HTTP.
 
-Proven live, twice, against two independent real Haxall 4.0.6 instances —
-`hisWrite` through Axon lands in Timberdoodle's Postgres (confirmed via
-this API's own `GET /history`), and `hisRead` reads it back correctly.
+Live-verified against a real Haxall 4.0.6 instance, through the current
+gateway/Bearer-token config (not just against source, and not just the
+old hardcoded-URL version): `hisWrite` called through Axon lands in
+Timberdoodle's Postgres, checked independently via this API's own `GET
+/history`; then Haxall's own `hisRead` op reads the same value back at
+the same timestamp. See [Re-verified live](#configuring-it) below for
+the exact steps that were run.
 
 This is push-mode: something is installed into Haxall so it calls out to
 Timberdoodle. For the opposite direction — Timberdoodle pulling from a
@@ -55,23 +59,66 @@ libAdd(["his"])
 ```
 
 That's it — no `libRemove` needed or possible for the boot lib; adding
-`his` is enough for it to win going forward. The extension needs to reach
-this API at `http://host.docker.internal:8000/` from inside the Haxall
-container (or wherever it's configured — see `TimberdoodleHisExt.fan`).
+`his` is enough for it to win going forward.
 
-**This URL is currently stale.** `ingest_api.py` is now one of six
-daemons behind the [gateway](/architecture#the-gateway) and no longer
-publishes port 8000 to the host directly, so `host.docker.internal:8000`
-will refuse the connection. Until `TimberdoodleHisExt.fan` is updated,
-either point it at the gateway instead
-(`http://host.docker.internal:8080/ingest/`, adding an `Authorization:
-Bearer <token>` header — `hisWrite` calls `POST /ingest`, a mutating
-call that needs an operator-role token, see README's "Gateway auth"
-section) or, for a Haxall integration you consider fully trusted,
-add a host port mapping back onto `ingest_api` in `docker-compose.yml`
-and accept that it bypasses the gateway's auth. Neither is done for you
-yet — pick the one that matches how trusted this particular Haxall
-instance is.
+## Configuring it
+
+The extension needs a Timberdoodle base URL and, since every route now
+goes through the JWT-enforced [gateway](/architecture#the-gateway), a
+Bearer token. Both are real settings (`TimberdoodleHisSettings.fan`, the
+same `@Setting`/`Ext.settings()` mechanism Haxall's own `hxHttp` lib
+uses), not hardcoded — get an operator-role token first (see
+[Gateway Auth](/gateway-auth) for `POST /auth/orgs`/`POST /auth/login`),
+then:
+
+```axon
+extSettingsUpdate("his", {authToken: "eyJhbGci..."})
+```
+
+`baseUri` already defaults to the gateway
+(`http://host.docker.internal:8080/ingest/`); only override it if you're
+pointing this at a non-default host/port, or — for a Haxall integration
+you consider fully trusted — at a host port mapped directly onto
+`ingest_api` in `docker-compose.yml`, bypassing the gateway (and then
+`authToken` isn't needed):
+
+```axon
+extSettingsUpdate("his", {baseUri: `http://host.docker.internal:8000/`})
+```
+
+Leaving `authToken` unset while `baseUri` still points at the gateway
+fails loudly — a `401` on the first `hisRead`/`hisWrite` — rather than
+silently talking to a dead port the way the previous hardcoded URL did.
+
+**Re-verified live (2026-08-27).** Compiled `tdHis`/`his.xetolib` against
+a real Haxall 4.0.6 install, `libAdd(["his"])`'d it, ran
+`extSettingsUpdate("his", {authToken, baseUri})` for real, wrote a value
+through a live curVal→`hisCollectCov` transition (`hisStatus: "ok"`), and
+confirmed it independently via this API's own `GET /history` — then read
+it back through Haxall's own `hisRead` op (which calls
+`TimberdoodleHisExt.read()` under the hood) and got the same value at the
+same timestamp. Both directions of the settings-based config work
+end-to-end through the gateway with a real Bearer token, not just
+cross-checked against source.
+
+## Automated smoke test
+
+`tests/test_haxall_drop_in_smoke.py` runs the same check above against a
+real Haxall instance — enables `his`/`hx.point`, sets `authToken`/`baseUri`,
+writes a value through a live curVal/`hisCollectCov` transition, and
+asserts it landed via this API's own `GET /ingest/history` and reads back
+correctly via Haxall's `hisRead`. Opt-in, same convention as
+`test_haystack_puller.py`'s real-Haxall test — skipped unless
+`HAXALL_SU_USERNAME` is set:
+
+```bash
+HAXALL_SU_USERNAME=su HAXALL_SU_PASSWORD=<pass> HAXALL_OSS_URL=http://localhost:8280 \
+  python -m pytest tests/test_haxall_drop_in_smoke.py -v
+```
+
+Needs a running Haxall instance with the `his` lib built (see "Enabling
+it" above) and the gateway up (`docker compose up -d`) — it creates its
+own throwaway org/admin account per run for the operator token.
 
 ## Known limitations
 
@@ -85,10 +132,7 @@ instance is.
   once per point per collection cycle with a batch of items for *that*
   point, never a multi-point batch in one call. This API's `/ingest`
   array support is for exactly that shape.
-- **No config point yet** — the Timberdoodle base URL is hardcoded in
-  `TimberdoodleHisExt.fan`. Add a real Xeto settings field on the `his`
-  lib if this needs to run against anything but the default host/port.
-- **Verified on plain, open-source Haxall** — not SkySpark specifically.
-  The `hx::IHisExt` mixin itself is shared, open infrastructure, so the
-  same library should be a drop-in for SkySpark too, but that's a claim
-  to verify independently, not assume.
+- **Verified on plain, open-source Haxall.** The `hx::IHisExt` mixin itself
+  is shared, open infrastructure, but compatibility with other Haystack
+  servers implementing it has not been verified — don't assume it without
+  testing.
