@@ -97,6 +97,34 @@ automatically, with zero additional configuration. The flip side is the
 same as the `stale` gap above: a point that's never reported never
 appears in any His-mode roster.
 
+## Severity, acknowledging, and snoozing
+
+A rule can carry a free-form `severity` (e.g. `"critical"`, `"warning"`,
+`"info"` — not validated or enumerated, just displayed) alongside `name`/
+`mode`/`type`/`applies_to`. It's copied onto every fault that rule opens,
+captured at open time — editing a rule's severity afterward doesn't
+relabel faults it already raised, same as `detail`.
+
+`POST /fault/faults/{id}/ack` and `POST /fault/faults/{id}/snooze`
+(`{"minutes": 60}`) let an operator acknowledge or temporarily suppress a
+specific open fault. Both are pure annotation: acking or snoozing a fault
+does not stop `fault_detector.py` from evaluating the underlying rule,
+close the fault, or affect webhook delivery — a snoozed fault that's still
+genuinely faulted keeps its `status: open` and still fires
+`fault.resolved` normally if it clears. See [`POST
+/faults/{id}/ack`](/api/fault) for the full field reference.
+
+There's a small browser UI over all of this at `/ui/alarms.html` (through
+the gateway: `localhost:8080/ui/alarms.html`) — a live-polling table of
+faults with Ack/Snooze buttons, filterable by status, plus a "New rule"
+form and a Rules table with Delete. The form has the same Form/Raw JSON
+toggle as [the derivation editor](/derivation): Form builds the config
+field-by-field with a `type` selector switching between `range`
+(`min`/`max`), `stuck` (`stuck_seconds`), and `stale` (`max_age_seconds`)
+fields; Raw JSON is the same underlying CodeMirror-edited object for
+hand-writing or pasting a whole rule. It's a thin client over the same
+API above, nothing it does isn't also reachable by curl.
+
 ## Fault lifecycle — transitions only
 
 Opening a fault that's already open is a no-op (no new row, no webhook).

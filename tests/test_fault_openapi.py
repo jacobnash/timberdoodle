@@ -130,6 +130,41 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(gw, live_server
     assert faults_resp.status_code == 200
     assert isinstance(faults_resp.json(), list)
 
+    # ack/snooze need a real fault row - open one directly against the same
+    # DB this live server's ts_pool points at (fault_detector.py's job, not
+    # this API's, to open faults - so bypass it here).
+    from datetime import datetime, timedelta, timezone
+
+    from timberdoodle.faults import open_fault
+    from timberdoodle.timeseries import connect
+
+    ts_conn = connect()
+    fault_id = open_fault(ts_conn, rule["id"], "urn:point:test-openapi-fd/ack-snooze", datetime.now(timezone.utc), severity="critical")
+    ts_conn.close()
+
+    ack_resp = gw.post(f"{live_server}/faults/{fault_id}/ack")
+    assert ack_resp.status_code == 204
+    ack_missing_resp = gw.post(f"{live_server}/faults/999999999/ack")
+    assert ack_missing_resp.status_code == 404
+
+    snooze_resp = gw.post(f"{live_server}/faults/{fault_id}/snooze", json={"minutes": 30})
+    assert snooze_resp.status_code == 200
+    assert_matches_schema(
+        snooze_resp.json(),
+        spec["paths"]["/faults/{id}/snooze"]["post"]["responses"]["200"]["content"]["application/json"]["schema"],
+        spec,
+    )
+    snooze_bad_resp = gw.post(f"{live_server}/faults/{fault_id}/snooze", json={"minutes": -5})
+    assert snooze_bad_resp.status_code == 400
+    snooze_missing_resp = gw.post(f"{live_server}/faults/999999999/snooze", json={"minutes": 5})
+    assert snooze_missing_resp.status_code == 404
+
+    acked_fault = next(f for f in gw.get(f"{live_server}/faults").json() if f["id"] == fault_id)
+    assert acked_fault["severity"] == "critical"
+    assert acked_fault["acked_by"] is not None
+    assert acked_fault["snoozed_until"] is not None
+    assert_matches_schema(acked_fault, {"$ref": "#/components/schemas/Fault"}, spec)
+
     # malformed body -> documented 400
     bad_resp = gw.post(f"{live_server}/rules", json={"mode": "cur"})  # missing name/type/applies_to
     assert bad_resp.status_code == 400

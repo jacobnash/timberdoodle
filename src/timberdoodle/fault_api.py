@@ -9,17 +9,21 @@ extending openapi.yaml (see fault-api-openapi.yaml's own note on this).
 
 import argparse
 import os
+import re
 import threading
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 from timberdoodle import docs_ui, gateway_auth, json_store, tracing
 from timberdoodle.faults import (
+    ack_fault,
     enable_webhook,
     ensure_schema,
     list_faults,
     list_webhook_health,
+    snooze_fault,
 )
 from timberdoodle.http_handler_base import BaseAPIHandler
 from timberdoodle.http_handler_base import respond_json as _respond_json
@@ -30,6 +34,9 @@ from timberdoodle.webhooks import validate_url
 tracer = tracing.get_tracer(__name__)
 
 OPENAPI_SPEC_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "fault-api-openapi.yaml")
+
+_ACK_RE = re.compile(r"^/faults/(\d+)/ack$")
+_SNOOZE_RE = re.compile(r"^/faults/(\d+)/snooze$")
 
 # Guards read-modify-write on rules.json/webhooks.json against concurrent
 # requests within this one process (ThreadingHTTPServer = one thread per
@@ -66,6 +73,14 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
             if self.path.startswith("/webhooks/") and self.path.endswith("/enable"):
                 webhook_id = self.path[len("/webhooks/"):-len("/enable")]
                 self.handle_traced("api.post_webhook_enable", lambda span: self._enable_webhook(webhook_id, span))
+                return
+            ack_match = _ACK_RE.match(self.path)
+            if ack_match:
+                self.handle_traced("api.ack_fault", lambda span: self._ack_fault(int(ack_match.group(1)), span))
+                return
+            snooze_match = _SNOOZE_RE.match(self.path)
+            if snooze_match:
+                self.handle_traced("api.snooze_fault", lambda span: self._snooze_fault(int(snooze_match.group(1)), span))
                 return
             self.send_response(404)
             self.end_headers()
@@ -174,6 +189,37 @@ def make_handler(rules_path: str, webhooks_path: str, ts_pool):
                 enable_webhook(conn, webhook_id)
             self.send_response(204)
             self.end_headers()
+
+        def _ack_fault(self, fault_id: int, span) -> None:
+            span.set_attribute("fault_id", fault_id)
+            # X-User is gateway-set ("<sub>:<role>", see gateway/njs/main.js)
+            # and documented there as logging/tracing only, not an authz
+            # input - fine for "who acked this" attribution, same trust
+            # level as any other audit-trail field this API already writes.
+            acked_by = self.headers.get("X-User", "unknown")
+            with ts_pool.connection() as conn:
+                found = ack_fault(conn, fault_id, acked_by, datetime.now(timezone.utc))
+            if not found:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(204)
+            self.end_headers()
+
+        def _snooze_fault(self, fault_id: int, span) -> None:
+            span.set_attribute("fault_id", fault_id)
+            body = self.read_json_body()
+            minutes = body["minutes"]
+            if not isinstance(minutes, (int, float)) or minutes <= 0:
+                raise ValueError("minutes must be a positive number")
+            until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            with ts_pool.connection() as conn:
+                found = snooze_fault(conn, fault_id, until)
+            if not found:
+                self.send_response(404)
+                self.end_headers()
+                return
+            _respond_json(self, 200, {"id": fault_id, "snoozed_until": until.isoformat()})
 
         def _list_faults(self, span) -> None:
             query = parse_qs(urlparse(self.path).query)

@@ -220,6 +220,76 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Fault"
+  /faults/{id}/ack:
+    post:
+      operationId: ackFault
+      tags: [Faults]
+      summary: Acknowledge a fault
+      description: >-
+        Sets `acked_at`/`acked_by` on the fault row (`acked_by` from the
+        gateway-forwarded `X-User` header). Re-acking an already-acked
+        fault just overwrites who/when - there's no separate unacknowledge
+        endpoint. Purely an operator-facing annotation: acking does not
+        stop `fault_detector.py` from evaluating the rule, close the
+        fault, or suppress webhook delivery.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Acknowledged. No response body.
+        "404":
+          description: No fault with that id.
+  /faults/{id}/snooze:
+    post:
+      operationId: snoozeFault
+      tags: [Faults]
+      summary: Snooze a fault for a number of minutes
+      description: >-
+        Sets `snoozed_until` on the fault row. Same as acking, this is
+        display/notification-suppression metadata only - it does not
+        pause rule evaluation or webhook delivery. If the fault resolves
+        and reopens while snoozed, the reopened row starts with
+        `snoozed_until: null` (it's a new row - see `POST /rules`'s
+        description of how open/resolve transitions work).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              properties:
+                minutes:
+                  type: number
+                  description: Minutes from now until the snooze expires. Must be positive.
+                  example: 60
+      responses:
+        "200":
+          description: Snoozed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  snoozed_until:
+                    type: string
+                    format: date-time
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No fault with that id.
   /openapi.yaml:
     get:
       operationId: getOpenApiSpec
@@ -278,6 +348,16 @@ components:
         max_age_seconds:
           type: number
           description: stale only.
+        severity:
+          type: string
+          description: >-
+            Free-form (e.g. `info`/`warning`/`critical`) - not validated or
+            enumerated server-side, the alarm console UI just displays
+            whatever string was given. Defaults to `warning` if omitted.
+            Copied onto each fault this rule opens at open time (see
+            `Fault.severity`) - editing a rule's severity later doesn't
+            relabel faults it already raised.
+          default: warning
     Rule:
       allOf:
         - type: object
@@ -344,6 +424,20 @@ components:
           format: date-time
         detail:
           type: ["object", "null"]
+        severity:
+          type: string
+          description: Copied from the rule's `severity` at the moment this fault opened. See `POST /rules`'s `severity` field.
+        acked_at:
+          type: ["string", "null"]
+          format: date-time
+          description: Set by `POST /faults/{id}/ack`. Null if never acked.
+        acked_by:
+          type: ["string", "null"]
+          description: The `X-User` value (gateway-forwarded) at the time of the most recent ack.
+        snoozed_until:
+          type: ["string", "null"]
+          format: date-time
+          description: Set by `POST /faults/{id}/snooze`. Null if not currently snoozed.
     Error:
       type: object
       required: [error]
