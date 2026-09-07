@@ -29,15 +29,19 @@ using hx
 **
 const class TimberdoodleHisExt : ExtObj, IHisExt
 {
-  ** Base URL of the running `python -m timberdoodle.ingest_api` process.
-  ** `host.docker.internal`, not `localhost` - this Ext runs inside the
-  ** Haxall container, and Timberdoodle runs on the host. Confirmed
-  ** resolvable under Colima (`getent hosts host.docker.internal`); most
-  ** Docker Desktop setups support the same name.
-  ** ponytail: hardcoded rather than reading from lib config/env - add a
-  ** real config point (a Xeto spec field on the `tdHis` lib) if this
-  ** ever needs to run against a non-default host/port.
-  const Uri baseUri := `http://host.docker.internal:8000/`
+  ** Settings record - see TimberdoodleHisSettings.fan.
+  override TimberdoodleHisSettings settings() { super.settings }
+
+  ** WebClient with the Bearer token attached, if one is configured -
+  ** every route requires auth now that ingest_api sits behind the
+  ** gateway (viewer role minimum for reads, operator for writes).
+  private WebClient client(Uri uri)
+  {
+    c := WebClient(uri)
+    tok := settings.authToken
+    if (!tok.isEmpty) c.reqHeaders["Authorization"] = "Bearer $tok"
+    return c
+  }
 
   override Void read(Dict pt, Span? span, Dict? opts, |HisItem| f)
   {
@@ -48,9 +52,8 @@ const class TimberdoodleHisExt : ExtObj, IHisExt
       q["start"] = (span.start.toJava / 1000).toStr
       q["end"]   = (span.end.toJava / 1000).toStr
     }
-    uri := (baseUri.toStr + "history?" + Uri.encodeQuery(q)).toUri
-    client := WebClient(uri)
-    resStr := client.getStr
+    uri := (settings.baseUri.toStr + "history?" + Uri.encodeQuery(q)).toUri
+    resStr := client(uri).getStr
     items := (Obj?[])JsonInStream(resStr.in).readJson
     items.each |Obj? raw|
     {
@@ -74,17 +77,17 @@ const class TimberdoodleHisExt : ExtObj, IHisExt
     {
       body := toWrite.map |item->Obj?| { Str:Obj?["point": id, "value": toWireVal(item.val), "ts": item.ts.toJava / 1000f] }
       json := JsonOutStream.writeJsonToStr(body)
-      client := WebClient(baseUri + `ingest`)
-      client.reqHeaders["Content-Type"] = "application/json"
-      client.postStr(json)
+      c := client(settings.baseUri + `ingest`)
+      c.reqHeaders["Content-Type"] = "application/json"
+      c.postStr(json)
     }
 
     toDelete.each |item|
     {
       q := Uri.encodeQuery(["point": id, "ts": (item.ts.toJava / 1000f).toStr])
-      client := WebClient((baseUri.toStr + "history?" + q).toUri)
-      client.reqMethod = "DELETE"
-      client.writeReq.readRes
+      c := client((settings.baseUri.toStr + "history?" + q).toUri)
+      c.reqMethod = "DELETE"
+      c.writeReq.readRes
     }
 
     return Future.makeCompletable.complete(null)
