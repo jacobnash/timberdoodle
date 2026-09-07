@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Timberdoodle — Alarms</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="console.css" />
+</head>
+<body>
+  <header>
+    <h1>Alarms</h1>
+    <span id="status">connecting…</span>
+    <nav class="top-nav">
+      <a href="index.html">Equipment tree</a>
+      <a href="alarms.html">Alarms</a>
+      <a href="derivations.html">Derivations</a>
+      <a href="devices.html">Devices</a>
+    </nav>
+  </header>
+  <!-- auth.js decides which of these two is actually shown, via inline
+       style.display (not the `hidden` attribute - see auth.js's
+       showLoginGate/hideLoginGate for why). main starts hidden here so
+       there's no flash of table content before that decision runs. -->
+  <div id="login-gate" class="login-gate">
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="hint" hidden></p>
+    </form>
+  </div>
+  <main id="main" class="console-main" style="display: none">
+    <section>
+      <div class="toolbar">
+        <label>Status
+          <select id="status-filter">
+            <option value="open" selected>Open</option>
+            <option value="resolved">Resolved</option>
+            <option value="">All</option>
+          </select>
+        </label>
+      </div>
+      <table id="faults-table">
+        <thead>
+          <tr>
+            <th>Severity</th><th>Rule</th><th>Point</th><th>Status</th><th>Opened</th>
+            <th>Detail</th><th>Ack</th><th>Snooze</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>New rule</h2>
+      <!-- Form tab builds the same config JSON field-by-field, one fieldset
+           per range/stuck/stale; Raw JSON hand-edits it directly - same
+           Form/Raw pattern as derivations.html's editor. -->
+      <form id="rule-form">
+        <div class="toolbar">
+          <button type="button" id="rule-mode-form" class="mode-tab" aria-pressed="true">Form</button>
+          <button type="button" id="rule-mode-raw" class="mode-tab" aria-pressed="false">Raw JSON</button>
+        </div>
+
+        <div id="rule-form-fields">
+          <label>Name <input type="text" id="rule-field-name" /></label>
+          <label>Mode
+            <select id="rule-field-mode">
+              <option value="cur">cur</option>
+              <option value="his">his</option>
+            </select>
+          </label>
+          <label>Severity (optional, default <code>warning</code>) <input type="text" id="rule-field-severity" placeholder="warning" /></label>
+          <label>Applies to - topic glob <input type="text" id="rule-field-topic-glob" placeholder="fbf/mock-ahu-1/*" /></label>
+          <label>Applies to - Brick class <input type="text" id="rule-field-brick-class" placeholder="Zone_Air_Temperature_Sensor" /></label>
+          <p class="hint">Set exactly one of the two "Applies to" fields.</p>
+
+          <label>Type
+            <select id="rule-field-type">
+              <option value="range">range</option>
+              <option value="stuck">stuck</option>
+              <option value="stale">stale</option>
+            </select>
+          </label>
+
+          <fieldset id="rule-fieldset-range">
+            <legend>Range fields</legend>
+            <label>Min <input type="number" id="rule-field-min" /></label>
+            <label>Max <input type="number" id="rule-field-max" /></label>
+          </fieldset>
+          <fieldset id="rule-fieldset-stuck" hidden>
+            <legend>Stuck fields</legend>
+            <label>Stuck seconds <input type="number" id="rule-field-stuck-seconds" min="1" /></label>
+          </fieldset>
+          <fieldset id="rule-fieldset-stale" hidden>
+            <legend>Stale fields</legend>
+            <label>Max age seconds <input type="number" id="rule-field-max-age-seconds" min="1" /></label>
+          </fieldset>
+        </div>
+
+        <label id="rule-config-label" style="display: none">Config (JSON)
+          <textarea id="rule-config" rows="8" data-editor-lang="json"></textarea>
+        </label>
+        <p id="rule-config-error" class="field-error" hidden></p>
+        <button type="submit">Create rule</button>
+        <button type="button" id="rule-clear">Reset to template</button>
+      </form>
+      <pre id="rule-result" class="result-pane"></pre>
+    </section>
+    <section>
+      <h2>Rules</h2>
+      <table id="rules-table">
+        <thead>
+          <tr><th>Name</th><th>Mode</th><th>Type</th><th>Severity</th><th>Applies to</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="auth.js"></script>
+  <script src="alarms.js"></script>
+  <script type="module" src="code-editor.js"></script>
+</body>
+</html>

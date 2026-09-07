@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Timberdoodle — Derivations</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="console.css" />
+</head>
+<body>
+  <header>
+    <h1>Derivations</h1>
+    <span id="status">connecting…</span>
+    <nav class="top-nav">
+      <a href="index.html">Equipment tree</a>
+      <a href="alarms.html">Alarms</a>
+      <a href="derivations.html">Derivations</a>
+      <a href="devices.html">Devices</a>
+    </nav>
+  </header>
+  <!-- auth.js decides which of these two is actually shown, via inline
+       style.display (not the `hidden` attribute - see auth.js's
+       showLoginGate/hideLoginGate for why). main starts hidden here so
+       there's no flash of editor content before that decision runs. -->
+  <div id="login-gate" class="login-gate">
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="hint" hidden></p>
+    </form>
+  </div>
+  <main id="main" class="console-main" style="display: none">
+    <section>
+      <h2>Configured derivations</h2>
+      <table id="derivations-table">
+        <thead><tr><th>Name</th><th>Kind</th><th>Window (s)</th><th>Output</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Editor</h2>
+      <p class="hint">
+        Runs through the same sandboxed <code>POST /derivations/test</code> and
+        <code>/dry-run</code> endpoints the API exposes - nothing here is a new
+        expression language, just a browser surface over it. See the
+        <a href="/api/derivation" target="_blank" rel="noopener">Derivation API</a> reference for the full field shapes per <code>kind</code>.
+        The <strong>Form</strong> tab below builds the same config JSON field-by-field;
+        switch to <strong>Raw JSON</strong> to hand-edit it directly (needed for
+        anything the form doesn't cover, or to paste a config in whole).
+        Loading a derivation puts its id in this page's URL - copy the
+        address bar to send someone straight to it.
+      </p>
+      <form id="editor-form">
+        <div class="toolbar">
+          <button type="button" id="editor-mode-form" class="mode-tab" aria-pressed="true">Form</button>
+          <button type="button" id="editor-mode-raw" class="mode-tab" aria-pressed="false">Raw JSON</button>
+        </div>
+
+        <div id="editor-form-fields">
+          <label>Kind
+            <select id="field-kind">
+              <option value="formula">formula</option>
+              <option value="rollup">rollup</option>
+            </select>
+          </label>
+          <label>Name <input type="text" id="field-name" /></label>
+          <label>Window (seconds) <input type="number" id="field-window-seconds" min="1" /></label>
+          <label>Interval override (seconds, optional) <input type="number" id="field-interval-seconds" min="1" /></label>
+          <label>Output Brick class (optional) <input type="text" id="field-output-brick-class" /></label>
+          <label>Output unit (optional) <input type="text" id="field-output-unit" /></label>
+          <label>Output label (optional) <input type="text" id="field-output-label" /></label>
+          <label>Depends on (comma-separated derivation ids, optional) <input type="text" id="field-depends-on" /></label>
+
+          <fieldset id="fieldset-formula">
+            <legend>Formula fields</legend>
+            <label>SPARQL select - binds <code>target_var</code> and every <code>input_vars</code>/<code>extra_vars</code> name
+              <textarea id="field-select" rows="4" spellcheck="false"></textarea>
+            </label>
+            <label>Target var <input type="text" id="field-target-var" /></label>
+            <label>Input vars (comma-separated, read as point history series) <input type="text" id="field-input-vars" /></label>
+            <label>Extra vars (comma-separated, passed through as raw values, optional) <input type="text" id="field-extra-vars" /></label>
+            <label>Applies-to topic glob (optional, triggers immediate re-evaluation) <input type="text" id="field-applies-to-topic-glob" /></label>
+            <label>Input windows override (JSON object, optional)
+              <input type="text" id="field-input-windows" placeholder='{"zoneTemp1": 7200}' />
+            </label>
+          </fieldset>
+
+          <fieldset id="fieldset-rollup" hidden>
+            <legend>Rollup fields</legend>
+            <label>Root select - binds <code>?root</code>, one row per top-level entity
+              <textarea id="field-root-select" rows="4" spellcheck="false"></textarea>
+            </label>
+            <label>Part relationship (CURIE, e.g. <code>brick:hasPart</code>) <input type="text" id="field-part-relationship" /></label>
+            <label>Leaf point class (CURIE, e.g. <code>brick:Meter</code>) <input type="text" id="field-leaf-point-class" /></label>
+          </fieldset>
+        </div>
+
+        <label id="editor-config-label" style="display: none">Config (JSON) - <code>name</code>, <code>kind</code> ("formula" or "rollup"), the
+          kind-specific selector fields (<code>select</code>/<code>target_var</code>/<code>input_vars</code> for
+          formula, or <code>root_select</code>/<code>part_relationship</code>/<code>leaf_point_class</code> for
+          rollup), <code>window_seconds</code>, <code>output</code>, <code>depends_on</code>
+          <textarea id="editor-config" rows="8" spellcheck="false" data-editor-lang="json"></textarea>
+          <p id="config-error" class="field-error" hidden></p>
+        </label>
+        <label>fn_source - must define <code>def run(inputs, row): ...</code>
+          <textarea id="editor-fn-source" rows="10" spellcheck="false" data-editor-lang="python"></textarea>
+        </label>
+        <label>test_cases (JSON array)
+          <textarea id="editor-test-cases" rows="6" spellcheck="false" data-editor-lang="json"></textarea>
+          <p id="test-cases-error" class="field-error" hidden></p>
+        </label>
+        <div class="toolbar">
+          <button type="button" id="editor-test">Run tests</button>
+          <button type="button" id="editor-dry-run">Dry run</button>
+          <button type="submit" id="editor-save">Save</button>
+          <button type="button" id="editor-clear">Clear</button>
+        </div>
+      </form>
+      <div id="test-results"></div>
+      <pre id="editor-result" class="result-pane hint">Results appear here.</pre>
+    </section>
+  </main>
+  <script src="auth.js"></script>
+  <script src="chart.js"></script>
+  <script src="derivations.js"></script>
+  <script type="module" src="code-editor.js"></script>
+</body>
+</html>

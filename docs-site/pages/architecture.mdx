@@ -101,8 +101,8 @@ external callers talk to — `localhost:8080`. It does two jobs:
 - **JWT auth, enforced in nginx itself** via njs (`gateway/njs/`): every
   request is verified against a per-route policy table
   (`gateway/njs/policy.js`) before it reaches a backend — no per-backend
-  Python auth code. See the repo's README "Gateway auth" section for how
-  to create an org/admin and get a token.
+  Python auth code. See [Gateway Auth](/gateway-auth) for how to create
+  an org/admin and get a token.
 
 This is deliberately *not* a merge of the five API processes into one
 codebase — they stay separate builds/images/restarts, same as before,
@@ -216,7 +216,15 @@ the live rule set) and the static `ui/` — served both by the gateway at
 `python -m timberdoodle.ui_server` on `:8004` for anyone not going
 through Docker. Either way it talks to `derivation_api.py`/`fault_api.py`
 over HTTP from the browser; through the gateway that's same-origin
-(`/ingest`, `/fault`, `/derivation`). Since the gateway auth migration,
+(`/ingest`, `/fault`, `/derivation`). Two of `ui/`'s pages are thin
+browser clients over one of those APIs each and nothing more (no new
+expression language, no server-side logic beyond what the API already
+has): `derivations.html` is a form over `derivation_api.py`'s existing
+`POST /derivations/test`/`/dry-run`/`/derivations` (write `fn_source`,
+run it, save it), and its sibling `alarms.html` is a table over
+`fault_api.py`'s `GET /faults` plus `POST /faults/{id}/ack`/`/snooze` —
+see [Fault Detection](/fault-detection) for that one. Since the gateway
+auth migration,
 though, that's a Bearer token, not basic auth — there's no
 browser-native credential prompt for a JWT. `ui/app.js` has to hold a
 login gate itself: exchange credentials for a token against

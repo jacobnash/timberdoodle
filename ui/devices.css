@@ -1,8 +1,6 @@
-/* Additive to style.css - table/dialog rules this page needs that the
-   equipment-tree page (index.html) has no use for. */
-
-.top-nav { margin-left: auto; font-size: 0.85rem; }
-.top-nav a { color: var(--accent); }
+/* Additive to style.css - devices-page-specific rules only. Generic
+   table/badge/dialog styling now lives in style.css (shared with
+   derivations.html/alarms.html). */
 
 #devices-main {
   display: block;
@@ -15,45 +13,18 @@
 #devices-main h2 { font-size: 1rem; margin: 0 0 0.5rem; }
 #devices-main h2 .hint { font-weight: normal; font-size: 0.8rem; }
 
-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-
-.badge {
-  display: inline-block;
-  border-radius: 999px;
-  padding: 0.05rem 0.55rem;
-  font-size: 0.75rem;
-  border: 1px solid var(--border);
-}
-.badge.status-pending { border-color: #b7791f; color: #b7791f; }
-.badge.status-provisioned { border-color: #2f855a; color: #2f855a; }
-.badge.status-ignored { color: var(--muted); }
-.badge.default-cred-flag { border-color: #c53030; color: #c53030; }
+/* --badge-color, not border-color/color directly - style.css's shared
+   .badge base rule derives both the text color and the tinted background
+   from this one token (see style.css's design-token pass). */
+.badge.status-pending { --badge-color: var(--color-warning); }
+.badge.status-provisioned { --badge-color: var(--color-success); }
+.badge.status-ignored { --badge-color: var(--muted); }
+.badge.default-cred-flag { --badge-color: var(--color-critical); }
 
 td button {
   font-size: 0.8rem;
   margin: 0 0.15rem 0.15rem 0;
 }
-
-dialog {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem;
-  color: inherit;
-  background: canvas;
-  max-width: 480px;
-}
-dialog label { display: block; margin-bottom: 0.5rem; font-size: 0.85rem; }
-dialog input, dialog textarea {
-  display: block;
-  width: 100%;
-  margin-top: 0.2rem;
-  font: inherit;
-  padding: 0.3rem;
-}
-dialog textarea { min-height: 4rem; font-family: monospace; font-size: 0.8rem; }
-dialog menu { display: flex; gap: 0.5rem; padding: 0; margin: 0.75rem 0 0; }
 
 .learn-list { list-style: none; padding: 0; margin: 0.4rem 0; max-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; }
 .learn-list li { padding: 0.15rem 0.4rem; font-size: 0.8rem; }

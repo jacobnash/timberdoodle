@@ -1,0 +1,147 @@
+---
+title: Derivations
+---
+
+A derivation computes a synthetic/derived history from other points — a rolling average, a unit
+conversion, an aggregate across a whole equipment tree — and writes the result back into
+`point_history` as a real point, attached to its target entity with full
+`prov:wasDerivedFrom` lineage back to whatever it was computed from. `derivation_api.py` only
+ever CRUDs `derivations.json`; `derivation_engine.py` is the only process that actually evaluates
+one, on a periodic sweep and (for `cur`-mode formulas) on matching MQTT messages — the same
+decoupled API/engine split [Fault Detection](/fault-detection) uses, for the same reason.
+
+The function that does the computing is plain Python — `def run(inputs, row): ...` — submitted as
+a string (`fn_source`) and run in a restricted sandbox, not a bespoke rule language. Project docs
+and the UI both call this "the lambda."
+
+## Two kinds
+
+- **`formula`** — a SPARQL `select` binds a target entity and named input points; the lambda runs
+  once per matched row. Good for combining a fixed, known set of points (two zone sensors into an
+  average, a supply/return pair into a delta).
+- **`rollup`** — a `root_select` binds one or more root entities, and the engine walks a
+  `part_relationship` tree under each root (`brick:hasPart`, say) itself, computing a value at
+  every node bottom-up from that node's own leaf points (`leaf_point_class`) plus its
+  already-computed children. Good for aggregating up an arbitrarily deep tree (meter → equip →
+  zone → floor → building) that a fixed-arity formula can't express, since the tree's shape isn't
+  known ahead of time.
+
+Both kinds share `window_seconds` (how much trailing history each input series covers),
+`output` (optional `brick_class`/`unit`/`label` for the point the lambda's result gets written
+as), and `depends_on` (other derivation ids that must be evaluated first in the same sweep, for
+chaining one derivation's output into another's input). See [the Derivation
+API](/api/derivation) for the full field reference, including the fields each kind alone uses
+(`target_var`/`input_vars`/`extra_vars`/`select` for `formula`; `root_select`/
+`part_relationship`/`leaf_point_class` for `rollup`).
+
+## Writing one — the UI, and why start there
+
+`/ui/derivations.html` (through the gateway: `localhost:8080/ui/derivations.html`) is a real
+in-browser editor over this API — three panes (config, `fn_source`, `test_cases` JSON), each
+a real code editor (CodeMirror 6, loaded from a CDN with no build step of our own — line numbers,
+Python/JSON syntax highlighting, not a bare `<textarea>`), plus Run tests/Dry run/Save/Clear
+actions, a results pane, and a table of existing derivations with "Load into editor"/"Delete."
+**Run tests** and **Dry run** are not the same check: Run tests
+executes only your own `test_cases` against the lambda in isolation (no live data, no SPARQL
+query); Dry run runs the *actual* `select`/`root_select` against live Oxigraph and real
+`point_history`, computing what would be written without writing it — the only way to know your
+`select` actually binds anything, since a broken query and a query with a correctly-empty result
+look identical from the test-cases pane alone.
+
+The config pane has two modes, **Form** (the default) and **Raw JSON**. Form builds the same
+config object field-by-field — a `kind` selector switches between the `formula` fields
+(`select`/`target_var`/`input_vars`/...) and the `rollup` fields
+(`root_select`/`part_relationship`/`leaf_point_class`), so you can't accidentally fill in a field
+the other kind ignores. Raw JSON is the hand-write/debug escape hatch underneath it — both modes
+edit the exact same object, so pasting a whole config in, or setting a field the form doesn't
+cover (`input_windows`'s per-var override map, say), is still one click away. Loading a derivation
+(from the table, or a freshly-created one after Save) also puts its id in the page's URL
+(`?id=...`) — copy the address bar to send someone straight to what you're looking at.
+
+Errors from Test/Dry run/Save aren't just dumped as text, either: a `SandboxError` or `SyntaxError`
+that names a line number (an unapproved `import`, a banned call, a dunder access, a plain syntax
+error) selects that exact line in the `fn_source` pane; a rejected Save whose `test_cases` failed
+re-runs them through Run tests' own pass/fail cards instead of showing the embedded JSON. None of
+this is new validation — it's the same sandbox/API errors that already existed, just routed back
+to where they're actionable.
+
+## Writing one — curl, for automation
+
+```bash
+curl -X POST localhost:8080/derivation/derivations \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "name": "avg-zone-temp",
+    "kind": "formula",
+    "select": "PREFIX brick: <https://brickschema.org/schema/Brick#> SELECT ?target ?a ?b WHERE { ?target brick:hasPoint ?a, ?b . ?a a brick:Zone_Air_Temperature_Sensor . ?b a brick:Zone_Air_Temperature_Sensor . FILTER(?a != ?b) }",
+    "target_var": "target",
+    "input_vars": ["a", "b"],
+    "window_seconds": 3600,
+    "fn_source": "def run(inputs, row):\n    vals = [v for s in inputs.values() for _, v in s[-1:]]\n    return sum(vals) / len(vals) if vals else None\n",
+    "test_cases": [{"inputs": {"a": [["2026-01-01T00:00:00Z", 70.0]], "b": [["2026-01-01T00:00:00Z", 74.0]]}, "row": {}, "expected": 72.0}],
+    "output": {"brick_class": "Effective_Zone_Air_Temperature_Sensor", "unit": "°F"},
+    "depends_on": []
+  }'
+```
+
+`test_cases` isn't optional metadata — `POST /derivations` rejects a request with an empty list
+(`test_cases must be a non-empty list`), and rejects one where a test case actually fails.
+Submitted code that will run unattended on real data needs at least one proof it does what you
+think before it's allowed to save, same reasoning as requiring a passing build before merge.
+
+Try it before saving, same two checks as the UI:
+
+```bash
+# Run tests only - no live data touched
+curl -X POST localhost:8080/derivation/derivations/test \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"fn_source": "...", "test_cases": [...]}'
+
+# Dry-run against real Oxigraph/point_history - computes, writes nothing
+curl -X POST localhost:8080/derivation/derivations/dry-run \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"id": "<a saved derivation id>"}'
+```
+
+`dry-run` also accepts a full draft body (not just `{"id": ...}`) for trying an unsaved config
+against live data before you commit to saving it.
+
+## The sandbox's actual guarantees — and what it isn't
+
+`fn_source` is arbitrary code accepted over HTTP, not a developer's pull request, so it runs
+through `sandbox.py` before it ever executes:
+
+- **An AST denylist** rejects `import`/`from ... import` statements, calls to
+  `eval`/`exec`/`compile`/`__import__`/`getattr`/`setattr`/`delattr`/`globals`/`locals`/`vars`/
+  `open`, and any `__dunder__` attribute access (the class of expression — e.g.
+  `().__class__.__base__.__subclasses__()` — that lets restricted-builtins sandboxes escape).
+  Checked on the parsed tree *before* `compile()`/`exec()` ever sees your source.
+- **A builtins allowlist** — the lambda's global namespace only has `abs`, `min`, `max`, `sum`,
+  `len`, `round`, `sorted`, `enumerate`, `range`, `zip`, `map`, `filter`, `float`, `int`, `bool`,
+  `str`, `list`, `dict`, `set`, `tuple`, `True`, `False`, `None`. No file I/O, no network, no
+  subprocess spawning — none of those builtins exist for it to call.
+- **A wall-clock timeout** (default 5 seconds) — the lambda runs in a daemon thread; a submission
+  that never returns gets abandoned (raises a clear "exceeded timeout" error to the caller) rather
+  than blocking the sweep forever. The abandoned thread itself keeps running to completion in the
+  background — Python threads can't be force-killed — but daemon status keeps it from blocking
+  process shutdown, and it never gets to report a result back to anyone.
+
+**This is defense in depth, not a hard isolation boundary.** Only OS-level isolation — a real
+subprocess or container per execution — would be that, and it's deliberately out of scope for
+this version. Do not expose `POST /derivations`, `POST /derivations/test`, or
+`POST /derivations/dry-run` to untrusted callers, or past a fully trusted, localhost-only
+deployment boundary — one notch more dangerous than the webhook-URL SSRF posture
+[Fault Detection](/fault-detection)/[Webhooks](/webhooks) already document, since this is
+arbitrary code execution, not a fetch to an attacker-chosen URL.
+
+## Failure isolation is per-(derivation, target), not per-derivation
+
+A single row failing inside a `formula` derivation (or a single node inside a `rollup` tree)
+doesn't stop the rest of that sweep — every other target still gets evaluated. Five consecutive
+failures for one specific target disable *that target* (tracked via
+`GET /derivation/derivations/{id}/targets`, cleared via
+`POST /derivation/derivations/{id}/targets/{target}/enable`); a `derivation`-level failure (a
+`select` that doesn't parse, an `fn_source` that won't compile) skips only that derivation for
+that pass, not the whole engine sweep. A lambda that runs cleanly but returns a value you didn't
+expect is a success from the engine's point of view — that's a data-quality problem in your own
+`fn_source`, not something this layer judges.
