@@ -2,6 +2,8 @@ x-daemon-env: &daemon-env
   TIMBERDOODLE_PG_DSN: postgresql://timberdoodle:${POSTGRES_PASSWORD:-timberdoodle}@postgres:5432/timberdoodle
   OXIGRAPH_URL: http://oxigraph:7878
   MQTT_HOST: mosquitto
+  MQTT_USERNAME: timberdoodle
+  MQTT_PASSWORD: ${MQTT_PASSWORD:?set in .env - see .env.example}
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
   TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS: ${TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS:-}
   # Blank-safe like the var above, not required (:?) - only auth_api.py
@@ -26,7 +28,17 @@ x-daemon-depends-on: &daemon-depends-on
 services:
   mosquitto:
     image: eclipse-mosquitto:2
-    command: mosquitto -c /mosquitto-no-auth.conf
+    entrypoint: ["/mosquitto/config/entrypoint.sh"]
+    environment:
+      # timberdoodle is the trusted backend account (mqtt_listener,
+      # fault_detector, derivation_engine, integration tests - see
+      # mosquitto/acl). Add "site-id:password" pairs here per FBF site
+      # once the command channel (multi-site.mdx) is actually in use -
+      # each site's username *is* its cmd/<username>/# scope.
+      MOSQUITTO_USERS: timberdoodle:${MQTT_PASSWORD:?set in .env - see .env.example}
+    volumes:
+      - ./mosquitto:/mosquitto/config:ro
+      - mosquitto-data:/mosquitto/data
     ports:
       - "1883:1883"
 
@@ -180,6 +192,41 @@ services:
       oxigraph:
         condition: service_started
 
+  sql_puller:
+    build: .
+    command: python -m timberdoodle.sql_puller
+    profiles: ["sql-pull"]
+    environment:
+      <<: *daemon-env
+      REMOTE_SQL_DSN: ${REMOTE_SQL_DSN:-}
+      REMOTE_SQL_QUERY: ${REMOTE_SQL_QUERY:-}
+      REMOTE_SQL_SOURCE_ID: ${REMOTE_SQL_SOURCE_ID:-sql}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oxigraph:
+        condition: service_started
+
+  energystar_puller:
+    build: .
+    command: python -m timberdoodle.energystar_puller
+    profiles: ["energystar-pull"]
+    environment:
+      <<: *daemon-env
+      ENERGYSTAR_USERNAME: ${ENERGYSTAR_USERNAME:-}
+      ENERGYSTAR_PASSWORD: ${ENERGYSTAR_PASSWORD:-}
+      ENERGYSTAR_ACCOUNT_ID: ${ENERGYSTAR_ACCOUNT_ID:-}
+      ENERGYSTAR_LIVE: ${ENERGYSTAR_LIVE:-}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oxigraph:
+        condition: service_started
+
   openmeteo_puller:
     build: .
     command: python -m timberdoodle.openmeteo_puller
@@ -229,3 +276,4 @@ volumes:
   oxigraph-data:
   postgres-data:
   grafana-data:
+  mosquitto-data:

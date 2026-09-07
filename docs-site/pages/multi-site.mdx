@@ -2,10 +2,13 @@
 title: Multi-Site & Campus
 ---
 
-**Status: design decision, not implemented.** No second site or command
-channel exists in this repo today — this page records the reasoning so it
-doesn't get re-litigated (or re-guessed) later. Everything below either
-cites code that exists now, or is explicitly marked as not built yet.
+**Status: partially implemented (2026-09-06).** No second site actually
+runs against this stack today, so "Site as data, not as infrastructure"
+and "When mesh-style networking would actually be justified" below are
+still design reasoning, not built systems. The command channel and MQTT
+reliability hardening described further down **are** now implemented —
+see those sections for what changed. This page still records the
+reasoning so none of it gets re-litigated (or re-guessed) later.
 
 ## Site as data, not as infrastructure
 
@@ -76,64 +79,69 @@ it's reachability: that server binds inside the building, and a central
 Timberdoodle has no inbound path to it, especially on a network that can
 only originate connections outward and never receive them.
 
-Design (not built): give `fbf.api` a command-topic subscription —
+**Implemented (2026-09-06):** `fbf.api` subscribes to a command topic —
 `cmd/{site}/{instance}/#` — on the same MQTT connection it already holds
-open to publish readings. A command message (e.g.
+open to publish readings, once started with `--site-id` (see FBF's own
+`docs/command-channel.md`). A command message (e.g.
 `{"action": "modbus_discover", "cidr": "10.2.0.0/24"}`) gets dispatched
-in-process to the same handler its own `POST /modbus/discover` route
-already calls. No new server, no new port, no firewall exception —
-it rides the identical egress rule that already lets FBF publish
-telemetry today, because it's the same connection.
+in-process to the same `handle_discover`/`handle_learn`/
+`handle_modbus_discover` functions its own HTTP routes call, and the
+outcome is published to `cmd/{site}/{instance}/result`. No new server, no
+new port, no firewall exception — it rides the identical egress rule that
+already lets FBF publish telemetry today, because it's the same
+connection.
 
-Two things this needs to be safe once it controls real scans, not just
-telemetry:
+The two things this needed to be safe once it controls real scans, not
+just telemetry, are both done:
 
-- **Persistent session** (`clean_session=False`, QoS 1) on FBF's
-  subscribe, so a command sent while the site is offline is queued by the
-  broker instead of dropped.
-- **Per-site broker ACLs.** `mosquitto`'s config in this repo has no
-  auth/ACL today, which is fine for one trusted network. Once a command
-  channel can tell FBF to scan a subnet, a client needs to be restricted
-  to its own site's topic prefix (`cmd/{its-own-site}/#`) — otherwise a
-  compromised or misconfigured client at one site could trigger scans at
-  another.
+- **Persistent session** (`clean_session=False`, QoS 1) on FBF's client,
+  set once `--site-id` is given (`fbf/src/fbf/mqtt_sink.py`'s `connect()`)
+  — a command sent while the site is offline is queued by the broker
+  instead of dropped.
+- **Per-site broker ACLs** (`mosquitto/acl`). `allow_anonymous` is off;
+  every client authenticates, and a `pattern readwrite cmd/%u/#` ACL entry
+  means a site's username *is* its command-topic scope — a client can only
+  read/write its own `cmd/<its own username>/#`, enforced by the broker
+  itself, not by convention. Live-verified: an authenticated `site-a`
+  client publishing to `cmd/site-b/...` is silently dropped by the broker
+  — a subscriber on `cmd/site-b/#` never receives it.
 
-## MQTT has zero delivery guarantee today
+## MQTT delivery guarantees
 
 This matters more once sites are remote and links aren't as reliable as
-one Docker network — worth being precise about, because the current
-answer is worse than "a small buffer," it's no buffer at all:
+one Docker network. This section used to describe several open gaps; as of
+2026-09-06 all of them are closed. QoS 1 publish and disk spooling on
+FBF's side, and `clean_session=False` on `mqtt_listener.py`, turned out to
+already be done by the time this page was checked against the code again
+— the mosquitto queue cap below was the one piece still genuinely open:
 
-- `fbf/src/fbf/mqtt_sink.py`'s `publish_reading()` calls
-  `client.publish(topic, payload, retain=True)` with no `qos` — paho-mqtt
-  defaults to **QoS 0**, no ack, no retry, nothing queued for an offline
-  subscriber by default.
-- `mqtt_listener.py`'s client never sets `clean_session=False`, so even
-  raising QoS wouldn't help — mosquitto only queues messages for a
-  session it's been told to remember across disconnects.
-- `retain=True` is not a history buffer. It caches the single *latest*
-  value per topic for new subscribers — a thousand readings during an
-  outage still leave exactly one value cached, the rest were never
-  written anywhere.
-- `mosquitto` runs as `mosquitto -c /mosquitto-no-auth.conf` (the image's
-  built-in default, no mounted config, no `persistence true`) and FBF's
-  publish path has no on-disk spool of its own.
+- `fbf/src/fbf/mqtt_sink.py`'s `publish_reading()` publishes at QoS 1, and
+  spools to a local JSONL file (replayed on reconnect) when the client
+  isn't currently connected — a link drop no longer means silently dropped
+  readings on FBF's side.
+- `mqtt_listener.py`'s client uses a stable `client_id` and
+  `clean_session=False`, so mosquitto's queued messages actually have a
+  session to be queued against. `fault_detector.py` and
+  `derivation_engine.py` authenticate the same way (all three now go
+  through the shared `timberdoodle.mqtt_util.make_client()`) but still use
+  ephemeral sessions — they evaluate live telemetry, not a durable log, so
+  losing a queued backlog across a restart is an accepted gap, unlike the
+  command channel below where a dropped message means a scan silently
+  never runs.
+- `mosquitto` now runs with a real mounted config (`mosquitto/mosquitto.conf`)
+  setting `persistence true` and `max_queued_messages 10000` (up from the
+  image default of 1000) — see `mosquitto/entrypoint.sh` for how the
+  password file is generated from `.env` at container start rather than
+  committing hashed credentials.
+- `retain=True` is still not a history buffer — it only caches the latest
+  value per topic for new subscribers. The queue depth above is what
+  actually protects an outage window, not `retain`.
 
-Net effect: a link drop between a site and the broker is a clean gap in
-`point_history` for every point on that link, for the full outage —
-nothing partially survives to lose.
-
-The cheap, honest comparison: `clean_session=False` + QoS 1 on both ends
-gets mosquitto's *default* `max_queued_messages` of 1000 per client —
-not unlimited, and 1000 messages across a busy multi-point site can
-still blow through in well under 12 hours. But 1000 is a real number
-above zero, which is what a Haxall/SkySpark-side connector doing the
-equivalent job with any store-and-forward buffering would already give
-you, and this stack currently gives none. That gap is a legitimate point
-in Haxall's favor as shipped, not a wash — worth fixing (raise the queue
-cap, turn on persistent sessions, and if the BACnet/Modbus devices keep
-their own trend logs, backfill from those on reconnect instead of trying
-to make MQTT itself lossless) rather than waved off as equivalent.
+1000 (now 10000) queued messages per client is still not unlimited — a
+busy multi-point site can still overflow it during a long enough outage.
+If that turns out to matter in practice, the next step is backfilling
+from BACnet/Modbus devices' own trend logs on reconnect rather than
+raising the cap indefinitely.
 
 ## When mesh-style networking would actually be justified
 

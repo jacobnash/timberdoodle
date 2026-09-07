@@ -29,7 +29,6 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
-import paho.mqtt.client as mqtt
 import pytest
 import requests
 from rdflib import URIRef
@@ -42,6 +41,7 @@ from timberdoodle.ingest import (
     topic_prefix_to_equip_uri,
     topic_to_point_uri,
 )
+from timberdoodle.mqtt_util import make_client
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.store import BRICK
 from timberdoodle.timeseries import connect
@@ -128,7 +128,7 @@ def _post_with_retry(url, json):
 
 
 def _publish(topic: str, value, ts: float) -> None:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = make_client()
     client.connect(MQTT_HOST, MQTT_PORT)
     client.publish(topic, json.dumps({"value": value, "ts": ts}), retain=True)
     client.disconnect()

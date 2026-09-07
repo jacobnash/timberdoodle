@@ -33,10 +33,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
-import paho.mqtt.client as mqtt
 from rdflib import URIRef
 
-from timberdoodle import derivation_health, json_store, sandbox, timeseries, tracing
+from timberdoodle import derivation_health, json_store, mqtt_util, sandbox, timeseries, tracing
 from timberdoodle.faults import list_faults
 from timberdoodle.ingest import link_point_to_equip, topic_to_point_uri
 from timberdoodle.remote_store import RemoteStore
@@ -355,7 +354,7 @@ def main() -> None:
             print(json.dumps(entry, default=str))
         return
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt_util.make_client()
     client.on_message = make_on_message(store, ts_conn, fault_conn, health_conn, cache)
     client.connect(args.mqtt_host, args.mqtt_port)
     client.subscribe("#")  # per-derivation applies_to_topic_glob is the real filter, applied in on_message

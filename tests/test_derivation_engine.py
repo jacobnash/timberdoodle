@@ -10,7 +10,6 @@ import json
 import time
 from datetime import datetime, timezone
 
-import paho.mqtt.client as mqtt
 import pytest
 from rdflib import URIRef
 
@@ -35,6 +34,7 @@ from timberdoodle.ingest import (
 )
 from timberdoodle.mapping import classify_point
 from timberdoodle.mqtt_listener import make_on_message
+from timberdoodle.mqtt_util import make_client
 from timberdoodle.remote_store import RemoteStore
 from timberdoodle.store import BRICK, PROV, Store
 from timberdoodle.timeseries import connect, read_latest, write_point_value
@@ -363,7 +363,7 @@ def test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_bro
     bacnet_point = topic_to_point_uri(bacnet_topic)
     modbus_point = topic_to_point_uri(modbus_topic)
 
-    listener = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    listener = make_client()
     listener.on_message = make_on_message(store, ts_conn)
     listener.connect("localhost", 1883)
     listener.subscribe(f"fbf/test-de-bacnet-ahu-{unique}/#")
@@ -373,7 +373,7 @@ def test_e2e_derivation_averages_bacnet_and_modbus_sourced_sensors_over_real_bro
     # rules/haystack_to_brick.yaml maps directly to Zone_Air_Temperature_Sensor.
     zone_temp_tags = {"zone": True, "air": True, "temp": True, "sensor": True}
 
-    publisher = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    publisher = make_client()
     publisher.connect("localhost", 1883)
     now_ts = time.time()
     publisher.publish(bacnet_topic, json.dumps({"value": 70.0, "ts": now_ts}), retain=True)

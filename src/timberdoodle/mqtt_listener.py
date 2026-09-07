@@ -8,9 +8,7 @@ import argparse
 import json
 import os
 
-import paho.mqtt.client as mqtt
-
-from timberdoodle import tracing
+from timberdoodle import mqtt_util, tracing
 from timberdoodle.ingest import (
     ingest_equip_tags,
     ingest_haystack_equip_tags,
@@ -136,7 +134,7 @@ def main() -> None:
     # mosquitto's default queued-message retention, ~1000 messages) survive
     # both a mid-process reconnect and a listener restart, instead of every
     # run getting a fresh random id and a fresh (empty) broker-side session.
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="timberdoodle-mqtt-listener", clean_session=False)
+    client = mqtt_util.make_client(client_id="timberdoodle-mqtt-listener", clean_session=False)
     client.on_connect = make_on_connect(args.topic_pattern)
     client.on_disconnect = on_disconnect
     client.on_message = make_on_message(store, ts_conn)

@@ -22,9 +22,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-import paho.mqtt.client as mqtt
-
-from timberdoodle import json_store, tracing
+from timberdoodle import json_store, mqtt_util, tracing
 from timberdoodle.faults import (
     close_fault,
     ensure_schema,
@@ -161,7 +159,11 @@ def handle_cur_reading(fault_conn, rule_cache: RuleCache, webhooks_path: str, to
             span.set_attribute("faulted", faulted)
 
             if faulted:
-                fault_id = open_fault(fault_conn, rule["id"], point_uri, now, detail={"value": value, "min": rule["min"], "max": rule["max"]})
+                fault_id = open_fault(
+                    fault_conn, rule["id"], point_uri, now,
+                    detail={"value": value, "min": rule["min"], "max": rule["max"]},
+                    severity=rule.get("severity", "warning"),
+                )
                 if fault_id is not None:
                     _fire_webhooks(webhooks_path, "fault.opened", rule["id"], point_uri, "open", {"value": value})
             else:
@@ -247,7 +249,7 @@ def evaluate_his_rules(
                 span.set_attribute("faulted", faulted)
 
                 if faulted:
-                    fault_id = open_fault(fault_conn, rule["id"], point_uri, now)
+                    fault_id = open_fault(fault_conn, rule["id"], point_uri, now, severity=rule.get("severity", "warning"))
                     if fault_id is not None:
                         _fire_webhooks(webhooks_path, "fault.opened", rule["id"], point_uri, "open", None)
                 else:
@@ -280,7 +282,7 @@ def main() -> None:
 
     rule_cache = RuleCache(args.rules_file, store=store)
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client = mqtt_util.make_client()
     client.on_message = make_on_message(fault_conn_cur, rule_cache, args.webhooks_file)
     client.connect(args.mqtt_host, args.mqtt_port)
     client.subscribe(args.topic_pattern)

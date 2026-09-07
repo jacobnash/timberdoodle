@@ -9,7 +9,6 @@ import json
 import time
 from types import SimpleNamespace
 
-import paho.mqtt.client as mqtt
 import pytest
 from rdflib import OWL
 
@@ -28,6 +27,7 @@ from timberdoodle.ingest import (
     topic_to_point_uri,
 )
 from timberdoodle.mqtt_listener import make_on_message
+from timberdoodle.mqtt_util import make_client
 from timberdoodle.store import BRICK, TD, Store
 from timberdoodle.timeseries import connect, read_latest
 
@@ -319,12 +319,12 @@ def test_full_round_trip_over_real_broker(ts_conn):
     topic = f"test-ingest:roundtrip:{int(time.time())}"
     store = RemoteStore()
 
-    listener = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    listener = make_client()
     listener.on_message = make_on_message(store, ts_conn)
     listener.connect("localhost", 1883)
     listener.subscribe(f"fbf/{topic}")
 
-    publisher = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    publisher = make_client()
     publisher.connect("localhost", 1883)
     payload = json.dumps({"point": topic, "value": 42.0, "ts": time.time()})
     publisher.publish(f"fbf/{topic}", payload, retain=True)
