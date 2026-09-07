@@ -7,6 +7,14 @@ set -euxo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
+# Ensure .env with the gateway's required HMAC secrets exists. This must run
+# here (not only in install) because environment builds skip install on boot
+# and .env is gitignored, so a fresh pod would otherwise have no secrets and
+# `docker compose up` would refuse to start the gateway.
+# shellcheck source=.cursor/gen-env.sh
+. "$REPO_DIR/.cursor/gen-env.sh"
+ensure_timberdoodle_env "$REPO_DIR"
+
 # Container-to-container traffic on a compose bridge is dropped in this nested
 # VM when bridged packets traverse the iptables FORWARD chain. Turning off
 # bridge-nf makes same-network traffic bypass it (published ports still work).
@@ -28,5 +36,13 @@ sudo docker info >/dev/null 2>&1 || { echo "dockerd failed to start"; sudo tail 
 
 # Bring up all infra + APIs + gateway; --wait blocks until healthchecks pass.
 sudo docker compose up -d --wait
+
+# The nginx gateway resolves and caches each backend's IP at its own startup.
+# If a reconciling `up` recreated a backend (new IP) without recreating the
+# gateway, its routes 502 with "connection refused" against the stale IP (a
+# documented gap, see CLAUDE.md). Restarting the gateway once the backends are
+# healthy guarantees it has fresh upstream addresses; it's a no-op cost on a
+# clean first boot where everything came up together.
+sudo docker compose restart gateway
 
 echo "Timberdoodle stack is up (gateway on http://localhost:8080)."

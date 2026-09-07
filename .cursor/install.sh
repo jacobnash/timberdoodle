@@ -65,22 +65,11 @@ if [ -f ../fbf/pyproject.toml ]; then
 fi
 
 # --- 3. Local .env with generated secrets (gitignored) ----------------------
-if [ ! -f .env ]; then
-  cp .env.example .env
-fi
-# The gateway refuses to start without these two HMAC secrets. They are not
-# real credentials - just long random keys - so generate them locally.
-if ! grep -qE '^TIMBERDOODLE_JWT_SECRET=.+' .env; then
-  sed -i "s|^TIMBERDOODLE_JWT_SECRET=.*|TIMBERDOODLE_JWT_SECRET=$(openssl rand -hex 32)|" .env
-fi
-if ! grep -qE '^TIMBERDOODLE_GATEWAY_SECRET=.+' .env; then
-  sed -i "s|^TIMBERDOODLE_GATEWAY_SECRET=.*|TIMBERDOODLE_GATEWAY_SECRET=$(openssl rand -hex 32)|" .env
-fi
-# Allow webhook registration/delivery to local receivers (dev/test only) -
-# see CLAUDE.md; the integration suite's webhook tests need this.
-if grep -qE '^TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS=$' .env; then
-  sed -i 's|^TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS=$|TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS=1|' .env
-fi
+# The gateway refuses to start without the two HMAC secrets. start.sh also
+# (re)generates .env per boot via the same helper, since builds skip install.
+# shellcheck source=.cursor/gen-env.sh
+. "$REPO_DIR/.cursor/gen-env.sh"
+ensure_timberdoodle_env "$REPO_DIR"
 
 # --- 4. Pre-build compose images so `start` only has to boot them -----------
 # dockerd doesn't survive into a later boot, so start it just for the build;
