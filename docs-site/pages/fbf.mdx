@@ -17,7 +17,7 @@ publishes readings to plain MQTT — no Fantom code required.
 ## How it reaches Timberdoodle
 
 FBF and Timberdoodle share nothing but an MQTT broker and a frozen wire
-contract (`fbf/docs/adding-a-new-source.md`):
+contract ([Adding a New Source](/fbf-adding-a-new-source)):
 
 - **Topic**: `f"{topic_prefix}/{point}"`, e.g. `fbf/mock-ahu-1/analogValue,1`.
 - **Payload**: JSON `{"point": <str>, "value": <int|float|str|bool|null>, "ts": <unix epoch float>}`,
