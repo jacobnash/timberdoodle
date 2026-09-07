@@ -1,0 +1,62 @@
+---
+title: Backups
+---
+
+`scripts/backup.py` dumps the two volumes that hold real state —
+`postgres-data` (via `docker compose exec postgres pg_dump`) and
+`oxigraph-data` (via the same bulk graph-store GET the SHACL validator
+uses) — into timestamped, gzip'd files under `backups/` (gitignored).
+`grafana-data` is regenerable dashboard config, out of scope.
+`scripts/restore.py` does the inverse.
+
+```bash
+docker compose up -d postgres oxigraph   # only these two are needed
+python scripts/backup.py                 # writes backups/postgres-<ts>.sql.gz, backups/oxigraph-<ts>.ttl.gz
+python scripts/restore.py --postgres-file backups/postgres-<ts>.sql.gz --oxigraph-file backups/oxigraph-<ts>.ttl.gz
+```
+
+`restore.py` assumes a fresh/empty postgres+oxigraph (disaster recovery,
+not a merge onto live data) — restoring onto tables that already exist
+exits non-zero (`psql -v ON_ERROR_STOP=1`) rather than silently
+succeeding. Both scripts default to this checkout's own docker-compose
+project and to `$OXIGRAPH_URL`/`http://localhost:7878`; `--help` on
+either documents `--compose-project-dir`/`--oxigraph-url`/`--out-dir` for
+pointing at a different target.
+
+## Automating it
+
+Nothing runs `backup.py` on its own. `backup.py` shells out to the
+**host's** `docker compose exec postgres pg_dump` — it assumes it's
+running on the Docker host, not inside a container on the compose
+network. That ruled out a compose sidecar (it would need the Docker
+socket/CLI mounted into a new image just to keep that call working, more
+attack surface than a backup job is worth) in favor of a host-level
+scheduled job that reuses `backup.py` completely unchanged.
+
+### systemd (recommended on a Linux host)
+
+```bash
+sudo cp scripts/systemd/timberdoodle-backup.{service,timer} /etc/systemd/system/
+sudo $EDITOR /etc/systemd/system/timberdoodle-backup.service   # set WorkingDirectory=
+sudo systemctl enable --now timberdoodle-backup.timer
+```
+
+`timberdoodle-backup.timer` runs daily by default (`OnCalendar=daily`,
+edit that line directly to change the schedule — see `man systemd.time`)
+with `Persistent=true`, so a run missed while the host was off fires on
+next boot instead of silently skipping. `timberdoodle-backup.service` sets
+`Environment=PATH=...` explicitly — systemd services don't inherit a
+login shell's `PATH`, so without it `docker` isn't found and the job fails
+every run with no output unless you go looking in `journalctl`.
+
+### cron (non-systemd hosts)
+
+```
+0 3 * * * cd /path/to/timberdoodle && python3 scripts/backup.py >> backups/backup.log 2>&1
+```
+
+### Either way
+
+Backups accumulate in `backups/` indefinitely — there's no
+retention/pruning yet. Watch disk usage, or clean the directory out
+yourself if it becomes a problem.
