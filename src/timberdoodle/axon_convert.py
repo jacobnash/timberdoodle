@@ -88,6 +88,10 @@ def tokenize(source: str) -> list[Token]:
             raise AxonSyntaxError(f"unexpected character {source[i]!r} at {i}")
         i = m.end()
         kind = m.lastgroup
+        if kind is None:
+            # every alternative in _TOKEN_RE is a named group, so a match
+            # always has a group name - guard for the type checker / safety.
+            raise AxonSyntaxError(f"unnamed token match at {m.start()}")
         if kind == "SKIP":
             continue
         value = m.group()
@@ -412,7 +416,9 @@ def _expr(node) -> ast.expr:
 
 def _body_statements(node) -> list[ast.stmt]:
     if isinstance(node, Do):
-        stmts = [ast.Assign([ast.Name(name, ctx=ast.Store())], _expr(value)) for name, value in node.bindings]
+        stmts: list[ast.stmt] = [
+            ast.Assign([ast.Name(name, ctx=ast.Store())], _expr(value)) for name, value in node.bindings
+        ]
         stmts.append(ast.Return(_expr(node.result)))
         return stmts
     return [ast.Return(_expr(node))]

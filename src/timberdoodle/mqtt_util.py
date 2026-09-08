@@ -7,12 +7,13 @@ clients, instead of patching each call site separately.
 """
 
 import os
+from typing import Any
 
 import paho.mqtt.client as mqtt
 
 
 def make_client(client_id: str | None = None, clean_session: bool | None = None) -> mqtt.Client:
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if client_id is not None:
         kwargs["client_id"] = client_id
     if clean_session is not None:
