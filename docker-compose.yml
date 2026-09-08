@@ -104,6 +104,13 @@ services:
   mqtt_listener:
     build: .
     command: python -m timberdoodle.mqtt_listener
+    # Pure daemons connect to Postgres/MQTT eagerly at startup and exit on
+    # failure. On a fresh DB volume, postgres' first-boot init briefly passes
+    # its healthcheck then restarts, refusing that first connection (a race the
+    # HTTP APIs dodge by connecting lazily). Restart so the daemon recovers
+    # instead of staying dead - otherwise the mqtt_listener/fault_detector-
+    # dependent e2e tests fail intermittently (seen on CI's fresh volumes).
+    restart: unless-stopped
     environment: *daemon-env
     volumes:
       - .:/app
@@ -137,6 +144,7 @@ services:
   fault_detector:
     build: .
     command: python -m timberdoodle.fault_detector
+    restart: unless-stopped  # see mqtt_listener - recover from the DB-not-ready-yet startup race
     environment: *daemon-env
     extra_hosts: *host-gateway
     volumes:
@@ -157,6 +165,7 @@ services:
   derivation_engine:
     build: .
     command: python -m timberdoodle.derivation_engine
+    restart: unless-stopped  # see mqtt_listener - recover from the DB-not-ready-yet startup race
     environment: *daemon-env
     volumes:
       - .:/app
