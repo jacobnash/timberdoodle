@@ -71,6 +71,11 @@ main {
   border-radius: 3px;
 }
 #tree button:hover { background: rgba(43, 108, 176, 0.12); }
+/* app.js's hisLink() - the per-equipment "chart everything" jump into
+   his.html, sitting inside each equipment <summary>. */
+#tree summary .his-link { text-decoration: none; font-size: 0.8rem; opacity: 0.55; }
+#tree summary .his-link:hover { opacity: 1; }
+#detail .his-link { color: var(--accent); }
 #tree button.selected { background: var(--accent); color: #fff; }
 
 #detail { padding: 1rem; overflow-y: auto; }

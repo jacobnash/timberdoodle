@@ -1,0 +1,109 @@
+/* Additive to style.css + console.css, for his.html only: the query bar,
+   the span/rollup chip row, and the chart cards his.js renders. */
+
+.query-section { margin-bottom: 1rem; }
+
+.query-bar { display: flex; gap: 0.5rem; align-items: stretch; }
+.query-bar input {
+  flex: 1;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.95rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: inherit;
+  color: inherit;
+}
+.query-bar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.query-bar button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.query-bar button:disabled { opacity: 0.6; cursor: progress; }
+
+.chips { flex-wrap: wrap; row-gap: 0.4rem; }
+.chip-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.chips button[data-span], .view-tabs button {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.chips button[data-span]:hover { border-color: var(--accent); color: var(--accent); }
+.chips button[data-span].active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.view-tabs { display: inline-flex; }
+.view-tabs button { border-radius: 0; margin-left: -1px; }
+.view-tabs button:first-child { border-radius: var(--radius-pill) 0 0 var(--radius-pill); margin-left: 0; }
+.view-tabs button:last-child { border-radius: 0 var(--radius-pill) var(--radius-pill) 0; }
+.live-toggle { margin-left: auto; font-size: 0.8rem; color: var(--muted); display: flex; gap: 0.3rem; align-items: center; }
+
+.examples { font-size: 0.8rem; margin: 0.5rem 0 0; line-height: 1.5; }
+.examples a { color: var(--accent); }
+.examples code { font-size: 0.78rem; }
+
+.summary { font-size: 0.85rem; color: var(--muted); margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: baseline; }
+.summary strong { color: inherit; }
+.summary details { display: inline; }
+.summary summary { cursor: pointer; display: inline; }
+.summary ul { margin: 0.25rem 0 0; padding-left: 1rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem; }
+
+/* One card per chart (a unit group, or a single point in per-point view). */
+.chart-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem 0.5rem;
+  margin-bottom: 0.9rem;
+  position: relative;
+}
+.chart-card h3 { margin: 0 0 0.4rem; font-size: 0.9rem; font-weight: 600; display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; }
+.chart-card h3 .hint { font-weight: normal; font-size: 0.75rem; }
+.chart-card canvas { display: block; width: 100%; height: 240px; border: none; border-radius: 0; cursor: crosshair; }
+.chart-card.bool canvas { height: 90px; }
+.chart-card.compact canvas { height: 160px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem; margin: 0.4rem 0 0; padding: 0; list-style: none; font-size: 0.78rem; }
+.legend li { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.legend li.muted { opacity: 0.4; }
+.legend .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.legend .stats { color: var(--muted); font-variant-numeric: tabular-nums; }
+.legend .last { font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend a { color: inherit; text-decoration: none; }
+.legend a:hover { text-decoration: underline; }
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, canvas 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  z-index: 2;
+  display: none;
+}
+.tooltip .t { color: var(--muted); }
+.tooltip .row { display: flex; gap: 0.5rem; align-items: center; }
+.tooltip .swatch { width: 8px; height: 8px; border-radius: 2px; }
+
+.str-list { font-size: 0.8rem; margin: 0; padding-left: 1rem; max-height: 220px; overflow-y: auto; }
+
+/* Grid view - Axon's his grid shape: ts, then one column per point. */
+.grid-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.grid-wrap table { font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.grid-wrap th { position: sticky; top: 0; background: canvas; }
+.grid-wrap th small { display: block; color: var(--muted); font-weight: normal; }
+.grid-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; font-size: 0.8rem; color: var(--muted); }
+.grid-toolbar button { font: inherit; font-size: 0.8rem; padding: 0.2rem 0.6rem; cursor: pointer; }

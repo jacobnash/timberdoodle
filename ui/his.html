@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Timberdoodle — Query</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="console.css" />
+  <link rel="stylesheet" href="his.css" />
+</head>
+<body>
+  <header>
+    <h1>Query</h1>
+    <span id="status">connecting…</span>
+    <nav class="top-nav">
+      <a href="index.html">Equipment tree</a>
+      <a href="his.html">Query</a>
+      <a href="alarms.html">Alarms</a>
+      <a href="derivations.html">Derivations</a>
+      <a href="devices.html">Devices</a>
+    </nav>
+  </header>
+  <!-- auth.js decides which of these two is actually shown, via inline
+       style.display (not the `hidden` attribute - see auth.js's
+       showLoginGate/hideLoginGate for why). main starts hidden here so
+       there's no flash of chart content before that decision runs. -->
+  <div id="login-gate" class="login-gate">
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="hint" hidden></p>
+    </form>
+  </div>
+  <main id="main" class="console-main" style="display: none">
+    <section class="query-section">
+      <form id="query-form" class="query-bar" autocomplete="off">
+        <input id="expr" type="text" spellcheck="false" placeholder="readAll(ahu).hisRead(today)" aria-label="Query expression" />
+        <button type="submit" id="run">Run</button>
+      </form>
+      <div class="toolbar chips" id="span-chips" aria-label="Span">
+        <span class="chip-label">hisRead</span>
+        <button type="button" data-span="today">today</button>
+        <button type="button" data-span="yesterday">yesterday</button>
+        <button type="button" data-span="thisWeek">thisWeek</button>
+        <button type="button" data-span="pastWeek">pastWeek</button>
+        <button type="button" data-span="thisMonth">thisMonth</button>
+        <button type="button" data-span="lastMonth">lastMonth</button>
+        <span class="chip-label">hisRollup</span>
+        <select id="rollup" aria-label="Rollup">
+          <option value="">raw</option>
+          <option value="avg, 5min">avg, 5min</option>
+          <option value="avg, 15min">avg, 15min</option>
+          <option value="avg, 1hr">avg, 1hr</option>
+          <option value="max, 1hr">max, 1hr</option>
+          <option value="min, 1hr">min, 1hr</option>
+          <option value="avg, 1day">avg, 1day</option>
+          <option value="sum, 1day">sum, 1day</option>
+        </select>
+        <span class="chip-label">view</span>
+        <span class="view-tabs" role="tablist">
+          <button type="button" class="mode-tab" data-view="unit" aria-pressed="true">By unit</button>
+          <button type="button" class="mode-tab" data-view="point" aria-pressed="false">Per point</button>
+          <button type="button" class="mode-tab" data-view="grid" aria-pressed="false">Grid</button>
+        </span>
+        <label class="live-toggle"><input type="checkbox" id="live" checked /> live</label>
+      </div>
+      <p class="hint examples">
+        Axon-style, straight off <a href="/api/ingest" target="_blank" rel="noopener"><code>GET /ingest/his</code></a>:
+        a Haystack filter picks points <em>or equipment</em> (equipment expands to all of its points),
+        <code>hisRead</code> picks the span, <code>hisRollup</code> folds long spans into buckets.
+        Try
+        <a href="#" data-example="readAll(ahu).hisRead(today)">readAll(ahu).hisRead(today)</a>,
+        <a href="#" data-example="readAll(air and temp and sensor).hisRead(pastWeek).hisRollup(avg, 1hr)">readAll(air and temp and sensor).hisRead(pastWeek).hisRollup(avg, 1hr)</a>,
+        <a href="#" data-example="readAll(fan and run).hisRead(thisMonth).hisRollup(avg, 1day)">readAll(fan and run).hisRead(thisMonth).hisRollup(avg, 1day)</a>,
+        <a href="#" data-example="readAll(Zone_Air_Temperature_Sensor).hisRead(yesterday)">readAll(Zone_Air_Temperature_Sensor).hisRead(yesterday)</a>.
+        Spans resolve in your browser's zone (<span id="tz"></span>).
+      </p>
+      <p id="error" class="field-error" hidden></p>
+    </section>
+
+    <section id="summary" class="summary" hidden></section>
+    <section id="results"></section>
+  </main>
+  <script src="auth.js"></script>
+  <script src="his.js"></script>
+</body>
+</html>

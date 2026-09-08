@@ -111,10 +111,26 @@ async function loadHistory(topic) {
 // Shared by both the flat by-class tree and the spatial (Site/Floor/Zone)
 // tree below - an equipment node's own points load lazily, the same way,
 // regardless of which tree it's reached through.
+// his.html?expr=... - the Axon-style "show me everything this equipment is
+// doing" view (see hisquery.py). `id==@<uri>` selects exactly this entity;
+// an equipment match expands to all of its points server-side.
+function hisLink(uri, text = "📈") {
+  const a = document.createElement("a");
+  a.className = "his-link";
+  a.href = `his.html?expr=${encodeURIComponent(`readAll(id==@${uri}).hisRead(today)`)}`;
+  a.title = "Chart every point of this equipment for today";
+  a.textContent = text;
+  // Inside a <summary>, a click would also toggle the <details> - harmless
+  // since we're navigating away, but don't let the tree react to it.
+  a.addEventListener("click", (ev) => ev.stopPropagation());
+  return a;
+}
+
 function buildEquipNode(equipUri, label) {
   const equipDetails = document.createElement("details");
   const equipSummary = document.createElement("summary");
-  equipSummary.textContent = label;
+  equipSummary.textContent = `${label} `;
+  equipSummary.appendChild(hisLink(equipUri));
   equipDetails.appendChild(equipSummary);
 
   const pointList = document.createElement("ul");
@@ -301,6 +317,10 @@ async function selectPoint(point, btn) {
     p.textContent = `Brick class: ${[...point.types].join(", ")}`;
     detailEl.appendChild(p);
   }
+  const queryP = document.createElement("p");
+  queryP.className = "hint";
+  queryP.appendChild(hisLink(point.uri, "Open in Query →"));
+  detailEl.appendChild(queryP);
 
   const tagList = document.createElement("ul");
   tagList.className = "tag-list";
