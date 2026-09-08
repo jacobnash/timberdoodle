@@ -45,6 +45,12 @@ jobs:
     env:
       TIMBERDOODLE_JWT_SECRET: ci-only-jwt-secret-needs-32-bytes-minimum
       TIMBERDOODLE_GATEWAY_SECRET: ci-only-gateway-secret-value
+      # Bare-metal test clients authenticate to mosquitto as this user (the
+      # daemon containers get it from docker-compose's daemon-env). Without
+      # MQTT_USERNAME set, mqtt_util.make_client() connects anonymously and
+      # the broker (auth now required) rejects it, so the real-broker tests
+      # publish into the void and their reads come back empty.
+      MQTT_USERNAME: timberdoodle
       MQTT_PASSWORD: ci-only-mqtt-password
       TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS: "1"
     steps:
