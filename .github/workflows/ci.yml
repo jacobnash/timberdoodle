@@ -35,6 +35,18 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    # Job-level so every docker-compose step (up, ps, logs) can interpolate
+    # them, not just `up`. These are throwaway CI-only values so the stack can
+    # start at all (auth_api/gateway refuse to start without the two secrets;
+    # mosquitto and every MQTT daemon refuse to start without MQTT_PASSWORD)
+    # and tests/test_gateway_auth.py has a real gateway to test against - never
+    # real secrets, never committed. TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS lets
+    # the webhook e2e tests register/deliver to their on-host receiver.
+    env:
+      TIMBERDOODLE_JWT_SECRET: ci-only-jwt-secret-needs-32-bytes-minimum
+      TIMBERDOODLE_GATEWAY_SECRET: ci-only-gateway-secret-value
+      MQTT_PASSWORD: ci-only-mqtt-password
+      TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,14 +54,6 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[dev,validate]"
       - run: docker compose up -d --build
-        env:
-          # Throwaway CI-only secrets so auth_api.py/gateway can start at
-          # all (auth_api.py refuses to start without
-          # TIMBERDOODLE_JWT_SECRET) and tests/test_gateway_auth.py has a
-          # real, working gateway to test against - never real secrets,
-          # never committed.
-          TIMBERDOODLE_JWT_SECRET: ci-only-jwt-secret-needs-32-bytes-minimum
-          TIMBERDOODLE_GATEWAY_SECRET: ci-only-gateway-secret-value
       - name: Wait for postgres to be healthy
         run: |
           for i in $(seq 1 60); do

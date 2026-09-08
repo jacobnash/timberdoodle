@@ -25,6 +25,14 @@ x-daemon-depends-on: &daemon-depends-on
   mosquitto:
     condition: service_started
 
+# Lets containers resolve the host machine as host.docker.internal (Docker
+# Desktop provides this automatically; plain Linux Docker needs the explicit
+# host-gateway mapping). fault_api validates and fault_detector delivers
+# webhook URLs, and the e2e webhook tests point them at a receiver running on
+# the host - see the webhook_receiver fixture / CLAUDE.md.
+x-host-gateway: &host-gateway
+  - "host.docker.internal:host-gateway"
+
 services:
   mosquitto:
     image: eclipse-mosquitto:2
@@ -118,6 +126,7 @@ services:
     build: .
     command: python -m timberdoodle.fault_api
     environment: *daemon-env
+    extra_hosts: *host-gateway
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
@@ -129,6 +138,7 @@ services:
     build: .
     command: python -m timberdoodle.fault_detector
     environment: *daemon-env
+    extra_hosts: *host-gateway
     volumes:
       - .:/app
     depends_on: *daemon-depends-on
