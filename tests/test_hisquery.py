@@ -186,6 +186,16 @@ def test_parse_interval(text, seconds, months):
     assert (iv.seconds, iv.months) == (seconds, months)
 
 
+@pytest.mark.parametrize("text", ["2mo", "6mo", "2yr", "13mo"])
+def test_unsupported_calendar_interval_is_a_parse_error(text):
+    # A query error, not a read_rollup error: read_rollup never runs when the
+    # filter matched nothing, so validating only there would return 200.
+    with pytest.raises(h.HisQueryError, match="calendar rollups support"):
+        h.parse_interval(text)
+    with pytest.raises(h.HisQueryError, match="calendar rollups support"):
+        h.parse_query(f"readAll(nothing).hisRead(today).hisRollup(avg, {text})")
+
+
 # --- compiler, run against a real (in-memory) graph -------------------------
 
 AHU = URIRef("urn:equip:fbf/ahu-1")

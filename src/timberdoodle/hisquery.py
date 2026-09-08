@@ -1115,6 +1115,12 @@ class Interval:
 
 _INTERVAL_RE = re.compile(r"^(\d+)([A-Za-z]+)$")
 
+# The calendar buckets Postgres date_trunc can cut (timeseries.read_rollup):
+# month, quarter, year. Checked here, at parse time, so `2mo` is a 400
+# whether or not the filter matches anything - read_rollup never runs on
+# an empty match, so a check there alone would let it through as a 200.
+_CALENDAR_MONTHS = {1, 3, 12}
+
 
 def parse_interval(text: str) -> Interval:
     m = _INTERVAL_RE.match(text.strip())
@@ -1127,5 +1133,8 @@ def parse_interval(text: str) -> Interval:
         raise HisQueryError(f"unknown interval unit {unit!r}; supported: {', '.join(_UNIT_SECONDS)}")
     secs = _UNIT_SECONDS[unit]
     if secs is None:
-        return Interval(text, None, n * (12 if unit == "yr" else 1))
+        months = n * (12 if unit == "yr" else 1)
+        if months not in _CALENDAR_MONTHS:
+            raise HisQueryError(f"calendar rollups support 1mo, 3mo, and 1yr/12mo only, not {text!r}")
+        return Interval(text, None, months)
     return Interval(text, n * secs, None)
