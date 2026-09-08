@@ -20,7 +20,7 @@ from rdflib import URIRef
 from timberdoodle.ingest import ingest_equip_tags, ingest_tags, link_point_to_equip
 from timberdoodle.ingest_api import OPENAPI_SPEC_PATH, make_handler
 from timberdoodle.remote_store import RemoteStore
-from timberdoodle.timeseries import connect_pool
+from timberdoodle.timeseries import connect, connect_pool
 
 GATEWAY_SECRET = "test-gateway-secret"
 
@@ -52,15 +52,37 @@ def gw():
 
 
 @pytest.fixture
-def ahu(live_server, gw):
+def ts_conn():
+    conn = connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def ahu(live_server, gw, ts_conn):
     """One AHU with a temp sensor (numeric, 4 samples spread over today
     UTC), a fan status (bool), and a sibling VAV so filters have something
     to exclude. Unique-per-run marker tag so this test's own data is the
     only thing its filters can match, regardless of what else the shared
-    dev DB holds."""
+    dev DB holds - and so teardown can delete exactly this run's triples
+    and rows from both stores (same scoped-cleanup pattern as
+    test_haystack_brick_e2e.py), leaving no "Test AHU" behind for a
+    developer's own `readAll(ahu)` to trip over."""
     base_url, store = live_server
     run = f"hisq{int(time.time() * 1000)}"
     prefix = f"test-his/{run}"
+    try:
+        yield _seed_ahu(base_url, store, gw, run, prefix)
+    finally:
+        ts_conn.execute("DELETE FROM point_history WHERE point_uri LIKE %s", (f"%{run}%",))
+        store._update(
+            f'DELETE {{ ?s ?p ?o }} WHERE {{ ?s ?p ?o . FILTER(CONTAINS(STR(?s), "{run}") || CONTAINS(STR(?o), "{run}")) }}'
+        )
+
+
+def _seed_ahu(base_url, store, gw, run, prefix):
     equip_uri = ingest_equip_tags(store, f"{prefix}/ahu", {"ahu": True, run: True, "dis": "Test AHU"})
     vav_uri = ingest_equip_tags(store, f"{prefix}/vav", {"vav": True, run: True})
 
