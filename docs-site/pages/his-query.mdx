@@ -1,0 +1,231 @@
+---
+title: Query (hisRead)
+---
+
+"What is this air handler doing right now?" In SkySpark the answer is one line of Axon in the
+shell — `readAll(ahu and air).hisRead(thisMonth)` — and every matching point's history is on
+screen. Timberdoodle has the same move: `GET /ingest/his?expr=...` takes that exact expression
+and returns every matched point's history as one JSON body, and `/ui/his.html` (through the
+gateway: `localhost:8080/ui/his.html`) is the shell-plus-chart surface over it — type a query, get
+charts, flip to a grid, download CSV.
+
+This is *not* Axon. It is the two Axon calls people actually reach for in a hurry — a Folio-style
+tag filter and `hisRead`/`hisRollup` — implemented over Timberdoodle's own two stores (the RDF
+entity graph in Oxigraph for the filter, `point_history` in Postgres/TimescaleDB for the
+history). Everything else Axon can do in that shell is deliberately out of scope; see "What is
+and isn't supported" below.
+
+## The query language
+
+```
+query    := source ("." call)*
+source   := ("read" | "readAll") "(" filter ")"
+          | filter                        # a bare filter means readAll
+call     := "hisRead" "(" span ")"
+          | "hisRollup" "(" fold "," interval ")"
+filter   := term (("and" | "or") term)*
+term     := "(" filter ")" | "not" term | name cmpOp value | name
+value    := "string" | number | true | false | @ref
+```
+
+Some real ones:
+
+```
+readAll(ahu and air).hisRead(thisMonth)              every point on every AHU, this month
+read(vav and zone).hisRead(yesterday)                the first VAV zone point only
+ahu and temp                                         bare filter — readAll(...).hisRead(today)
+readAll(Air_Handling_Unit).hisRead(2026-09-01..2026-09-07)
+readAll(point and unit == "kW").hisRead(pastWeek).hisRollup(avg, 1hr)
+readAll(id == @site1).hisRead(2026-08)
+readAll(temp and not air).hisRead(lastWeek).hisRollup(max, 1day)
+```
+
+### The filter
+
+The filter is Haystack's filter grammar — `and`/`or`/`not`, parentheses, marker tags by name,
+and `tag <op> value` comparisons with `==`, `!=`, `<`, `<=`, `>`, `>=`. It compiles to a single
+SPARQL `SELECT DISTINCT ?s` over the entity graph, which is what makes it fast enough to type
+against interactively; `hisquery.compile_filter()` is the whole compiler if you want to see the
+translation.
+
+What a bare name means, in order of what's checked:
+
+- **A marker tag** — `ahu`, `air`, `temp`, `sensor`, `zone`... anything ingest wrote as a
+  `haystack:hasTag` triple (that's every marker a source sent, verbatim). `ahu and air` is "has
+  both markers."
+- **A Brick or PROJ class** — a `CapitalCase` name like `Air_Handling_Unit` or
+  `Zone_Air_Temperature_Sensor` also matches `rdf:type`, so you can query by the class
+  `mapping.py` assigned without knowing which tags it keyed off.
+- **Structural aliases** — `point`, `equip`, and `site` match on the graph's shape (has a
+  `brick:hasPoint`/is a `brick:Point`, and so on), not only on the literal marker, so a point that
+  arrived with no `point` marker still counts.
+
+Comparisons: `dis == "AHU-1"`, `unit == "°F"`, `kind != "Bool"` compare `haystack:*` value tags
+as-is; `id == @some-id` matches the entity's own id (and it's the only thing `id` may be compared
+to — `id == 5` is a parse error). Ref-valued tags compare by id too: `siteRef == @site1`, and
+`equipRef == @ahu-1` also matches through the graph's own `brick:isPointOf` edge, so it works for
+points whose source never sent an `equipRef` tag. A comparison on a tag the entity doesn't have
+is false, as in Haystack (`x != 1` doesn't match recs with no `x`). Numbers compare as bare
+numbers, with no unit conversion — `temp > 72°F` and `temp > 72` are the same comparison; the
+unit is accepted and ignored.
+
+**`read` vs `readAll`.** `readAll(filter)` returns every match. `read(filter)` takes the first
+match only, and if nothing matches it's a **404**, the same as Axon's `UnknownRecErr` — a
+`readAll` that matches nothing is an empty, successful 200. A bare filter with no
+`read`/`readAll` and no `.hisRead(...)` is `readAll(filter).hisRead(today)`.
+
+### Equipment expands to its points
+
+This is the one deliberate departure from Axon, and the reason to have the feature. In Axon,
+`read(ahu).hisRead(today)` is an error: an equipment record has no history. Here, any matched
+entity that isn't itself a point is expanded to every point it `brick:hasPoint` (following
+`owl:sameAs` merges, the same expansion `ingest.points_of_equip` does), so "show me this AHU" is
+`read(ahu and dis == "AHU-1")`, not a hunt for the right `equipRef` syntax. A filter that matches
+points directly (`temp and zone`) returns those points unexpanded. The expansion is one hop —
+`brick:hasPoint` — so a matched *site* contributes only points attached directly to it, not
+everything under its equipment; query the equipment (`readAll(equip and siteRef == @site1)`)
+for that.
+
+### Spans
+
+`hisRead(span)` takes Axon's `DateSpan` vocabulary. Every span is a half-open `[start, end)`
+range of *local* days in the request's timezone (see `tz` below), never a rolling clock window —
+`today` is local midnight to local midnight tomorrow, exactly as SkySpark treats it.
+
+| Span | Meaning |
+| --- | --- |
+| `today`, `yesterday` | one local day |
+| `thisWeek`, `lastWeek`, `pastWeek` | Mon–Sun weeks; `past*` is the trailing 7 days ending today |
+| `thisMonth`, `lastMonth`, `pastMonth` | calendar months; `pastMonth` is the trailing month ending today |
+| `thisQuarter`, `lastQuarter` | calendar quarters |
+| `thisYear`, `lastYear`, `pastYear` | calendar years; `pastYear` is the trailing year ending today |
+| `2026-09-03` | one explicit day |
+| `2026-09` | one explicit month |
+| `2026` | one explicit year |
+| `2026-09-01..2026-09-07` | inclusive date range (both ends are whole days) |
+
+Omit `.hisRead(...)` entirely and the span is `today`.
+
+### Rollups
+
+`.hisRollup(fold, interval)` aggregates on the server in one SQL statement instead of shipping
+raw rows and folding in the browser — a month of 1-minute data comes back as 720 hourly buckets,
+not 43,000 rows. `fold` is one of `avg`, `min`, `max`, `sum`, `count`. `interval` is an Axon
+duration: `15min`, `1hr`, `6h`, `1day`, `1wk`, `1mo`, `1yr` (units: `s`/`sec`, `min`, `h`/`hr`,
+`day`, `wk`, `mo`, `yr`).
+
+Fixed-length intervals use TimescaleDB's `date_bin`, anchored at the span start; `mo`/`yr` have
+no fixed length and use `date_trunc` in the request timezone, so a `1mo` bucket really is a
+calendar month and a `1day` bucket really starts at local midnight. Boolean points fold as 0/1,
+so `avg` of a `Bool` point is its duty cycle for the bucket — the most useful single number for a
+fan-status or occupancy point over a day.
+
+## `GET /ingest/his`
+
+| Param | Meaning |
+| --- | --- |
+| `expr` | the query, required |
+| `tz` | IANA timezone for span resolution and calendar bucketing; defaults to `TIMBERDOODLE_TZ`, then `UTC` |
+| `limit` | per-point raw-row cap; defaults to 10,000, max 200,000 (rollups aren't capped — they're already bucketed) |
+
+The response is one object with the resolved `span` (`start`/`end` epoch seconds, the
+`label`, the `tz` used), the `rollup` in effect (or `null`), `matched` (the entity ids the filter
+hit, previewed) and `matchedCount`, and `series` — one entry per point with `id`, `dis`, `unit`,
+`kind` (`Number`/`Bool`/`Str`), its `brickClass`, its parent `equip`/`equipDis`, the `history`
+as `[{ts, value}, ...]` oldest-first, and a `truncated` flag that's `true` when `limit` clipped
+that point. Full schema: [the Ingest API reference](/api/ingest).
+
+`limit` matters. Axon's `hisRead` applies its own default row limit for the same reason: a month
+of 5-second data across forty points is millions of rows, and one browser request shouldn't be
+able to ask for that by accident. When you see `truncated: true`, add a `.hisRollup(...)` — that's
+what it's for — rather than raising `limit`.
+
+Errors: a malformed or unsupported expression is a **400** whose body names the problem and the
+position in the text (`unsupported function 'foo' at position 12; only hisRead(span) and
+hisRollup(fold, interval) are supported`, `unknown span 'thisFortnight'`, `id must be compared
+to a @ref`); `read(...)` with no match is a **404**. Nothing is ever silently reinterpreted —
+an expression that uses something this grammar doesn't cover fails loudly, by design.
+
+Through the gateway the route is `GET /ingest/his`, and it requires the `viewer` role (or
+higher) like every other read — see [Gateway auth](/gateway-auth).
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  --get 'http://localhost:8080/ingest/his' \
+  --data-urlencode 'expr=readAll(ahu and air).hisRead(pastWeek).hisRollup(avg, 1hr)' \
+  --data-urlencode 'tz=America/Chicago'
+```
+
+## `/ui/his.html`
+
+The page is the query bar and three views of whatever it returns, with no build step and no
+charting library — the charts are hand-drawn `<canvas>`, same as the rest of `ui/`.
+
+- **Query bar** — type any expression above and press Enter (or Run). Below it, span chips
+  (`today`, `yesterday`, `thisWeek`, `thisMonth`, ...) and a rollup dropdown *rewrite the
+  expression in the bar* rather than being hidden state: clicking `lastWeek` turns
+  `readAll(ahu).hisRead(today)` into `readAll(ahu).hisRead(lastWeek)` in front of you, so the
+  text is always the whole truth about what's on screen, and copying it into `curl` gives you
+  the same result.
+- **By unit** — the default. Points are grouped onto one chart per unit (`°F`, `cfm`, `%`,
+  `kW`...), so every temperature on the AHU shares an axis and a supply/return/mixed-air
+  comparison is one glance. `Bool` points draw as a step chart; `Str` points list as a
+  timeline of value changes. Hovering gives a crosshair and a tooltip with every series' value
+  at that instant; clicking a legend row hides/shows that series; the small `↗` next to a name
+  opens that one point alone in a new query.
+- **Per point** — one small chart per point with min/max/avg/last stats, for when the by-unit
+  chart is too crowded.
+- **Grid** — the same data as a table (one column per point, one row per timestamp), plus a
+  **Download CSV** button.
+- **Live** — on by default; re-runs the query every 10 seconds while the span's end is still in
+  the future (`today`, `thisWeek`...), for watching a piece of equipment respond. A span that's
+  entirely in the past (`yesterday`, `2026-08`) can't change, so it isn't polled.
+
+The URL updates as you go (`his.html?expr=...`) so a query is a link you can send someone. The
+rest of the UI links here too: every equipment row in the tree on `index.html` has a `📈` that
+opens `readAll(id==@<that equip>).hisRead(today)`, and the point detail panel has
+"Open in Query →" for a single point.
+
+## Timezones
+
+`TIMBERDOODLE_TZ` (in `.env`; see `.env.example`) sets the default `tz` for `GET /his`, so `today`
+means the building's today, not the server's UTC today. Any request can override it with
+`?tz=...`. The UI sends the browser's own IANA zone, so it always sees local days; the env var is
+for API clients and scripts that don't say. Set it to the zone the *building* is in — a
+multi-site deployment spanning zones should pass `tz` per request instead (see
+[Multi-site](/multi-site)).
+
+## What is and isn't supported
+
+Supported: the grammar above, exactly. Not supported, and each one is an explicit 400 naming
+what was rejected, never a silent approximation:
+
+- **Tag paths** (`equipRef->dis == "AHU-1"`, `siteRef->geoCity`). Match on the entity's own tags,
+  or on its Brick class, and let the equipment→point expansion do the walk for you.
+- **Arithmetic and every other Axon function** — no `hisFoldAll`, `hisInterpolate`, `hisClip`,
+  `.map(...)`, no `toDateSpan`, no lambdas. There are two calls, `hisRead` and `hisRollup`, and
+  that's the whole library. Anything computed from history belongs in a
+  [Derivation](/derivation), which writes a real point you can then `hisRead` like any other.
+- **Unit-aware comparisons.** `temp > 72°F` compares the number 72 against stored values; the
+  unit is parsed and ignored, not converted.
+- **Time-of-day spans** (`hisRead(2026-09-03T08:00..2026-09-03T17:00)`) — spans are whole local
+  days.
+- **Writes.** There is no `hisWrite` here; that's [`POST /ingest/history`](/api/ingest) or the
+  [Haxall drop-in](/haxall-drop-in).
+
+For the wider question of what a SkySpark user gives up moving here — and what's on the backlog
+to close — see `todo/skyspark-haxall-migration-gaps.md` in the repo.
+
+## Where the code is
+
+- `src/timberdoodle/hisquery.py` — tokenizer, parser, filter→SPARQL compiler, span resolution,
+  and `run_query()`, which strings them together. Each stage is a pure function so
+  `tests/test_hisquery.py` runs the parser, compiler (against an in-memory `rdflib` graph), and
+  span math with no services.
+- `src/timberdoodle/timeseries.py` — `read_range_many()` (raw, multi-point, per-point limit),
+  `read_rollup()` (`date_bin`/`date_trunc` aggregation), `read_point_labels()` (unit/label
+  fallback from history rows, for derivation-engine points that carry no graph tags).
+- `src/timberdoodle/ingest_api.py` — the `GET /his` route. `tests/test_his_route.py` covers it
+  end-to-end against live Oxigraph and Postgres (`pytest -m integration`).
+- `gateway/njs/policy.js` — the `GET /ingest/his` → `viewer` row.
+- `ui/his.html`, `ui/his.js`, `ui/his.css` — the page; `ui/app.js` for the tree/detail deep links.

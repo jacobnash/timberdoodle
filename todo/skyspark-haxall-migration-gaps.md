@@ -249,6 +249,46 @@ day-two gap.
   `scripts/systemd/timberdoodle-backup.timer` (new), `README.md`,
   `docs-site/pages/backups.mdx` (new), `docs-site/zudoku.config.tsx`.
 
+### 8. Ad-hoc `readAll(filter).hisRead(span)` — the SkySpark shell reflex
+
+- **Status:** v1 done (2026-09-08)
+- **Why:** the single most-used thing in a SkySpark shell isn't a rule or a view, it's typing
+  `readAll(ahu and air).hisRead(thisMonth)` and looking at the charts. Item 6's converter
+  deliberately stubs `hisRead`/`readAll` because there was no Timberdoodle equivalent to map
+  *to* — the equivalent was "write a SPARQL query, then N `GET /history` calls, then chart it
+  yourself," which is exactly the loss a migrating SkySpark user feels first and most often.
+  Nothing in the UI let you say "show me this AHU" without already knowing its point URIs.
+- **What was done:** `src/timberdoodle/hisquery.py` — a native parser for the two-call subset
+  (`read`/`readAll` + Haystack filter grammar, `.hisRead(span)`, `.hisRollup(fold, interval)`),
+  a filter→SPARQL compiler (marker tags as `haystack:hasTag`, CapitalCase names as Brick/PROJ
+  `rdf:type`, `point`/`equip`/`site` structural aliases, `id ==`/`equipRef ==` refs, missing-tag
+  comparisons false as in Haystack), and Axon `DateSpan` resolution (`today`...`pastYear`,
+  `YYYY-MM-DD`, `YYYY-MM`, `YYYY`, `a..b`) to local-midnight half-open ranges in a request
+  timezone. `timeseries.read_range_many`/`read_rollup` do multi-point range reads and
+  `date_bin`/`date_trunc` server-side aggregation (booleans fold as 0/1 → duty cycle). Exposed as
+  `GET /ingest/his` (`viewer` in `gateway/njs/policy.js`, documented in `openapi.yaml`), rendered
+  by `ui/his.html` (canvas charts grouped by unit, per-point, grid + CSV, live refresh, span
+  chips/rollup dropdown that rewrite the visible expression so the text is always the whole
+  truth), deep-linked from every equipment in the tree and every point detail panel. Default
+  span timezone via `TIMBERDOODLE_TZ`. The one deliberate non-Axon behavior: matched
+  *equipment* expands to its points (Axon errors on `read(ahu).hisRead(...)`) - that's the
+  whole point of the feature.
+- **Test coverage:** `tests/test_hisquery.py` (parser, compiler against an in-memory rdflib
+  graph, span math including leap years/year rollover, interval parsing, documented 400s — no
+  services) and `tests/test_his_route.py` (integration: equipment expansion, `read` 404,
+  rollup arithmetic incl. boolean folding, per-point `limit`/`truncated`, `tz` shifting,
+  derivation-engine points taking unit/label from history rows).
+- **Not done, deliberately:** tag paths (`equipRef->dis`), arithmetic, any Axon function beyond
+  the two, unit-aware comparisons (`temp > 72°F` compares the bare 72), time-of-day spans. Each
+  is an explicit 400 naming what was rejected, never a silent approximation. Item 6's converter
+  still stubs `hisRead`/`readAll` — wiring it to emit `hisquery.run_query(...)` calls for the
+  subset this now covers is the obvious follow-on, not done here.
+- **Files:** `src/timberdoodle/hisquery.py` (new), `src/timberdoodle/timeseries.py`,
+  `src/timberdoodle/ingest_api.py`, `openapi.yaml`, `gateway/njs/policy.js`, `ui/his.html`,
+  `ui/his.js`, `ui/his.css` (new), `ui/app.js`, `ui/style.css`, every `ui/*.html` nav,
+  `tests/test_hisquery.py`, `tests/test_his_route.py` (new), `docs-site/pages/his-query.mdx`
+  (new), `docs-site/zudoku.config.tsx`, `README.md`, `.env.example`, `docker-compose.yml`.
+
 ## Explicitly out of scope for this backlog
 
 - **SSO/LDAP and encryption at rest** — real day-two gaps (Section 02/03 of the review), but

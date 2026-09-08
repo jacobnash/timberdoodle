@@ -6,6 +6,9 @@ x-daemon-env: &daemon-env
   MQTT_PASSWORD: ${MQTT_PASSWORD:?set in .env - see .env.example}
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
   TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS: ${TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS:-}
+  # Blank-safe; only ingest_api.py's GET /his reads it (default tz for
+  # hisRead spans - see .env.example). Blank means UTC.
+  TIMBERDOODLE_TZ: ${TIMBERDOODLE_TZ:-}
   # Blank-safe like the var above, not required (:?) - only auth_api.py
   # and the gateway need this so far (incremental gateway-auth rollout,
   # see the plan doc's Phase 2 migration path); other daemons never

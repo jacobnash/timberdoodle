@@ -42,7 +42,7 @@ _EPOCH_START = datetime.fromtimestamp(0, tz=timezone.utc)
 # Zone that `hisRead(today)` etc. resolve "today" in when a request doesn't
 # say (?tz=...). UTC, not the container's local zone, so the answer doesn't
 # silently change between a bare-metal run and docker compose.
-DEFAULT_TZ = os.environ.get("TIMBERDOODLE_TZ", "UTC")
+DEFAULT_TZ = os.environ.get("TIMBERDOODLE_TZ") or "UTC"
 
 
 def make_handler(store, ts_pool):

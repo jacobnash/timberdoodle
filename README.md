@@ -160,6 +160,33 @@ python -m timberdoodle.ui_server                         # browse equipment/poin
 existing admin account — create one first with `POST /auth/orgs` (see
 "Gateway auth" above) if you don't have one yet.
 
+### Query: `readAll(ahu and air).hisRead(thisMonth)`
+
+The SkySpark reflex — type one line, see every point on a piece of
+equipment charted — is `GET /ingest/his` plus `ui/his.html`
+(localhost:8080/ui/his.html through the gateway, `Query` in the top nav).
+The expression is Axon-shaped: a Haystack tag filter (`and`/`or`/`not`,
+marker tags, Brick class names, `tag == value`), then `.hisRead(span)`
+with Axon's span words (`today`, `yesterday`, `thisWeek`, `lastMonth`,
+`2026-09`, `2026-09-01..2026-09-07`, ...) and an optional
+`.hisRollup(avg, 1hr)` that aggregates server-side in SQL. Matched
+equipment expands to all of its points, so `read(ahu and dis == "AHU-1")`
+is enough - no `equipRef` hunting. Charts are grouped by unit, with a
+per-point view, a grid, and CSV download; the URL carries the query, so a
+result is a link.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" --get localhost:8080/ingest/his \
+  --data-urlencode 'expr=readAll(ahu and air).hisRead(pastWeek).hisRollup(avg, 1hr)' \
+  --data-urlencode 'tz=America/Chicago'
+```
+
+Set `TIMBERDOODLE_TZ` in `.env` so `today` means the building's today for
+clients that don't pass `tz`. Full grammar, span table, and what is
+deliberately *not* supported (tag paths, arithmetic, other Axon
+functions):
+[`docs-site/pages/his-query.mdx`](docs-site/pages/his-query.mdx).
+
 `ui_server.py` also serves `ui/devices.html` (localhost:8004/devices.html)
 - a dashboard for FBF's periodic BACnet/Modbus device discovery: review
 discovered devices, set per-device credentials, and provision connections,
