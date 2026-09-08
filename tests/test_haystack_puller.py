@@ -47,6 +47,7 @@ def ts_conn():
     return conn
 
 
+@pytest.mark.integration
 def test_first_seen_point_backfills_the_configured_lookback_window(ts_conn):
     store = Store()
     client = FakeHaystackClient(points=[{"id": "p1", "point": True}])
@@ -62,6 +63,7 @@ def test_first_seen_point_backfills_the_configured_lookback_window(ts_conn):
     assert 2.9 * 86400 < (end - start).total_seconds() < 3.1 * 86400
 
 
+@pytest.mark.integration
 def test_already_checkpointed_point_pulls_only_the_incremental_range(ts_conn):
     store = Store()
     client = FakeHaystackClient(points=[{"id": "p1", "point": True}])
@@ -81,6 +83,7 @@ def test_already_checkpointed_point_pulls_only_the_incremental_range(ts_conn):
     assert second_call_range != first_call_range
 
 
+@pytest.mark.integration
 def test_equip_ref_gets_namespaced_and_resolves_via_link_equip_ref(ts_conn):
     store = Store()
     client = FakeHaystackClient(
@@ -99,6 +102,7 @@ def test_equip_ref_gets_namespaced_and_resolves_via_link_equip_ref(ts_conn):
     assert str(rows[0].equip) == f"urn:equip:haystack:{SOURCE_ID}:e1"
 
 
+@pytest.mark.integration
 def test_realistic_point_tags_classify_into_a_real_brick_class(ts_conn):
     rules = load_rules()
     rule = next(r for r in rules if r["brick_class"] == "Zone_Air_Temperature_Sensor")
@@ -114,6 +118,7 @@ def test_realistic_point_tags_classify_into_a_real_brick_class(ts_conn):
     assert str(BRICK["Zone_Air_Temperature_Sensor"]) in {str(r.type) for r in rows}
 
 
+@pytest.mark.integration
 def test_history_rows_land_in_postgres(ts_conn):
     store = Store()
     now = time.time()
@@ -128,6 +133,7 @@ def test_history_rows_land_in_postgres(ts_conn):
     assert read_latest(ts_conn, str(point_uri)) == 71.5
 
 
+@pytest.mark.integration
 def test_pull_points_and_pull_equip_tally_classification_outcomes(ts_conn):
     """--once's migration summary is only as good as these counts - a
     direct-match point/equip and a no-overlap-at-all point/equip should
