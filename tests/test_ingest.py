@@ -39,6 +39,7 @@ def ts_conn():
     return conn
 
 
+@pytest.mark.integration
 def test_ingest_reading_writes_graph_and_timeseries(ts_conn):
     store = Store()
     topic = "test-ingest:zone-temp"
@@ -53,12 +54,14 @@ def test_ingest_reading_writes_graph_and_timeseries(ts_conn):
     assert read_latest(ts_conn, str(point_uri)) == 71.0
 
 
+@pytest.mark.integration
 def test_ingest_reading_preserves_value_types(ts_conn):
     store = Store()
     ingest_reading(store, ts_conn, "test-ingest:fan-status", "active", ts=time.time())
     assert read_latest(ts_conn, str(topic_to_point_uri("test-ingest:fan-status"))) == "active"
 
 
+@pytest.mark.integration
 def test_ingest_reading_is_idempotent_on_same_topic_and_ts(ts_conn):
     """Repeating the exact same (point, ts, value) - e.g. an MQTT-retained
     message redelivered on resubscribe - is a safe no-op: the graph never
@@ -112,6 +115,7 @@ def test_ingest_tags_serializes_nested_dict_and_list_values_as_json():
     assert json.loads(str(rows[0].v)) == {"lat": 37.5, "lng": -122.3}
 
 
+@pytest.mark.integration
 def test_listener_routes_tags_suffix_without_touching_timeseries(ts_conn):
     store = Store()
     on_message = make_on_message(store, ts_conn)
@@ -205,6 +209,7 @@ def test_listener_plain_tags_branch_resolves_equip_ref_when_equip_already_landed
     assert (point_uri, BRICK.isPointOf, equip_uri) in store.graph
 
 
+@pytest.mark.integration
 def test_listener_handles_malformed_payload_without_crashing(ts_conn):
     store = Store()
     on_message = make_on_message(store, ts_conn)
