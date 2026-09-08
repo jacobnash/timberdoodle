@@ -253,6 +253,96 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           description: No history item at exactly that point + timestamp.
+  /his:
+    get:
+      operationId: hisQuery
+      tags: [History]
+      summary: Axon-style `readAll(filter).hisRead(span)` - many points' history in one call
+      description: |
+        The SkySpark "what is this AHU doing?" query, against Timberdoodle's
+        own graph + history: a Haystack filter picks entities, `hisRead`
+        picks the span, an optional `hisRollup` folds the raw samples into
+        fixed buckets. Points that match are read directly; **equipment**
+        that matches is expanded to every point it `brick:hasPoint` (the
+        one deliberate departure from Axon, where `hisRead` on an equip is
+        an error) - so `read(ahu).hisRead(today)` is enough to see a whole
+        air handler. Rendered as charts by the demo UI at `/ui/his.html`.
+
+        Grammar (see `hisquery.py` for the full set of error messages):
+
+        ```
+        readAll(<filter>).hisRead(<span>)[.hisRollup(<fold>, <interval>)]
+        read(<filter>)...          # first match only; 404 if nothing matches
+        <filter>                   # bare filter = readAll(...).hisRead(today)
+        ```
+
+        - **filter**: Haystack filter syntax - `ahu`, `air and temp and sensor`,
+          `not vav`, `equipRef == @AHU-1`, `id == @urn:equip:fbf/ahu-1`,
+          `kind == "Bool"`, `temp > 72`, parentheses. A bare name matches a
+          marker tag (`haystack:hasTag`); a CapitalCase name also matches a
+          Brick/PROJ class (`Air_Handling_Unit`, `Zone_Air_Temperature_Sensor`).
+          `point`/`equip`/`site` also match on graph structure, since
+          BACnet-sourced entities never got those as explicit tags. Not
+          supported: `->` tag paths, arithmetic, unit conversion.
+        - **span**: `today`, `yesterday`, `thisWeek`, `lastWeek`, `pastWeek`,
+          `thisMonth`, `lastMonth`, `pastMonth`, `thisQuarter`, `lastQuarter`,
+          `thisYear`, `lastYear`, `pastYear` (with or without `()`), a date
+          `2026-09-03`, a month `2026-09`, a year `2026`, or a range
+          `2026-09-01..2026-09-07`. Resolved in `tz`; weeks start Monday.
+        - **rollup**: fold is one of `avg`, `min`, `max`, `sum`, `count`;
+          interval is `<n><unit>` with unit `sec`, `min`, `hr`, `day`, `wk`,
+          `mo` (1/3 only), `yr`. Booleans fold as 0/1; each bucket is stamped
+          with its start.
+      parameters:
+        - name: expr
+          in: query
+          required: true
+          description: The query, as written above.
+          schema:
+            type: string
+          examples:
+            equip:
+              value: readAll(ahu).hisRead(today)
+            points:
+              value: readAll(air and temp and sensor).hisRead(thisMonth).hisRollup(avg, 1hr)
+            byId:
+              value: read(id==@urn:equip:fbf/mock-ahu-1).hisRead(2026-09-01..2026-09-07)
+        - name: tz
+          in: query
+          description: IANA zone the span is resolved in. Defaults to `TIMBERDOODLE_TZ`, else UTC.
+          schema:
+            type: string
+          example: America/New_York
+        - name: limit
+          in: query
+          description: >-
+            Max raw samples per point (ignored for rollups). Defaults to
+            10000, same as SkySpark's `hisRead` default; each series reports
+            `truncated: true` if it hit this.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200000
+      responses:
+        "200":
+          description: One series per resolved point, each with its metadata and history for the span.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HisQueryResult"
+        "400":
+          description: The expression doesn't parse (unknown span, unsupported function, bad filter syntax, ...), or `tz`/`limit` is invalid. The message names the position and what was expected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { "error": "unknown span 'nope'; use one of lastMonth, lastQuarter, ..." }
+        "404":
+          description: A `read(...)` (singular) matched no entity - Axon's UnknownRecErr. `readAll` never 404s; it returns an empty `series`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /openapi.yaml:
     get:
       operationId: getOpenApiSpec
@@ -306,6 +396,85 @@ components:
             - type: string
             - type: boolean
             - type: "null"
+    HisQueryResult:
+      type: object
+      required: [expr, mode, filter, span, rollup, limit, matched, matchedCount, series]
+      properties:
+        expr:
+          type: string
+          description: The expression as received.
+        mode:
+          type: string
+          enum: [read, readAll]
+        filter:
+          type: string
+          description: Just the filter part of the expression.
+        span:
+          type: object
+          required: [start, end, label, tz]
+          properties:
+            start: { type: number, description: Unix epoch seconds, inclusive. }
+            end: { type: number, description: Unix epoch seconds, exclusive. }
+            label: { type: string, description: The span as written, e.g. `thisMonth` or `2026-09-01..2026-09-07`. }
+            tz: { type: string }
+        rollup:
+          description: Present when the expression had a `hisRollup`; every series is then numeric and bucket-stamped.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [fold, interval]
+              properties:
+                fold: { type: string, enum: [avg, min, max, sum, count] }
+                interval: { type: string, example: 1hr }
+        limit:
+          type: integer
+          description: The per-point raw-sample cap that applied.
+        matched:
+          type: array
+          description: URIs the filter matched (before equipment-to-point expansion), first 200.
+          items: { type: string }
+        matchedCount:
+          type: integer
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/HisSeries"
+    HisSeries:
+      type: object
+      required: [id, point, dis, unit, kind, brickClass, tags, equip, equipDis, history, truncated]
+      properties:
+        id:
+          type: string
+          description: The point's graph URI.
+        point:
+          type: string
+          description: The same identity `GET /history?point=` takes (URI minus the `urn:point:` prefix).
+        dis:
+          type: string
+          description: Display name - the point's `dis` tag, else the last segment of its source topic.
+        unit:
+          type: [string, "null"]
+        kind:
+          type: [string, "null"]
+          description: Haystack kind - `Number`, `Bool`, or `Str`; from the point's `kind` tag, else inferred from the data. Always `Number` for a rollup.
+        brickClass:
+          type: [string, "null"]
+        tags:
+          type: array
+          items: { type: string }
+          description: Marker tags on the point.
+        equip:
+          type: [string, "null"]
+          description: URI of the equipment this point `brick:isPointOf`, if any.
+        equipDis:
+          type: [string, "null"]
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoryItem"
+        truncated:
+          type: boolean
+          description: True if the point had more raw samples in the span than `limit` allowed.
     TagsRequest:
       type: object
       required: [point, tags]

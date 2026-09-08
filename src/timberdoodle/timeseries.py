@@ -136,6 +136,106 @@ def read_range(conn: psycopg.Connection, point_uri: str, start_ts: datetime, end
     return [(ts, _row_to_value((value, value_text, value_bool))) for ts, value, value_text, value_bool in cur.fetchall()]
 
 
+def read_range_many(
+    conn: psycopg.Connection, point_uris: list[str], start_ts: datetime, end_ts: datetime, limit: int
+) -> dict[str, tuple[list, bool]]:
+    """Every point's raw history over [start_ts, end_ts) in one query, for
+    hisquery's multi-point reads - one round trip for an AHU's 20 points
+    instead of 20. Half-open on the end, unlike read_range's inclusive
+    bounds: a day span ending at next-midnight must not pick up the first
+    sample of the following day. `limit` is per point; the returned flag
+    says whether that point had more rows than were returned."""
+    if not point_uris:
+        return {}
+    cur = conn.execute(
+        """
+        SELECT point_uri, ts, value, value_text, value_bool FROM (
+            SELECT point_uri, ts, value, value_text, value_bool,
+                   ROW_NUMBER() OVER (PARTITION BY point_uri ORDER BY ts) AS rn
+            FROM point_history
+            WHERE point_uri = ANY(%s) AND ts >= %s AND ts < %s
+        ) t
+        WHERE rn <= %s
+        ORDER BY point_uri, ts
+        """,
+        (point_uris, start_ts, end_ts, limit + 1),
+    )
+    out: dict[str, tuple[list, bool]] = {uri: ([], False) for uri in point_uris}
+    for point_uri, ts, value, value_text, value_bool in cur.fetchall():
+        rows, _ = out[point_uri]
+        rows.append((ts, _row_to_value((value, value_text, value_bool))))
+    for uri, (rows, _) in out.items():
+        if len(rows) > limit:
+            out[uri] = (rows[:limit], True)
+    return out
+
+
+# Calendar-length intervals date_bin can't express - handled by date_trunc
+# instead, which only knows these three month multiples.
+_CALENDAR_TRUNC = {1: "month", 3: "quarter", 12: "year"}
+
+_FOLD_SQL = {
+    "avg": "AVG(v)",
+    "min": "MIN(v)",
+    "max": "MAX(v)",
+    "sum": "SUM(v)",
+    "count": "COUNT(v)",
+}
+
+
+def read_rollup(
+    conn: psycopg.Connection,
+    point_uris: list[str],
+    start_ts: datetime,
+    end_ts: datetime,
+    fold: str,
+    interval_seconds: int | None,
+    interval_months: int | None,
+    tz: str,
+) -> dict[str, list]:
+    """Axon hisRollup(fold, interval), done in Postgres rather than
+    shipping a month of raw samples to Python (or the browser) to fold
+    there. Fixed intervals use date_bin aligned to the span start, the
+    same origin Axon buckets from; month/quarter/year use date_trunc in
+    the caller's zone so a "day" or "month" boundary is the local one.
+    Booleans fold as 0/1 (so avg of a run status = fraction of the
+    interval it was on); text values are skipped - there's nothing
+    numeric to fold. Each bucket is stamped with its START."""
+    if not point_uris:
+        return {}
+    if fold not in _FOLD_SQL:
+        raise ValueError(f"unknown fold {fold!r}")
+    if interval_months is not None:
+        unit = _CALENDAR_TRUNC.get(interval_months)
+        if unit is None:
+            raise ValueError("calendar rollups support 1mo, 3mo, and 1yr/12mo only")
+        bucket_sql = "date_trunc(%s, ts, %s)"
+        bucket_params: tuple = (unit, tz)
+    else:
+        if not interval_seconds or interval_seconds <= 0:
+            raise ValueError("rollup interval must be positive")
+        bucket_sql = "date_bin(make_interval(secs => %s), ts, %s)"
+        bucket_params = (interval_seconds, start_ts)
+    cur = conn.execute(
+        f"""
+        SELECT point_uri, bucket, {_FOLD_SQL[fold]} AS agg FROM (
+            SELECT point_uri, {bucket_sql} AS bucket,
+                   COALESCE(value, value_bool::int::float8) AS v
+            FROM point_history
+            WHERE point_uri = ANY(%s) AND ts >= %s AND ts < %s
+        ) t
+        WHERE v IS NOT NULL
+        GROUP BY point_uri, bucket
+        ORDER BY point_uri, bucket
+        """,
+        (*bucket_params, point_uris, start_ts, end_ts),
+    )
+    out: dict[str, list] = {uri: [] for uri in point_uris}
+    for point_uri, bucket, agg in cur.fetchall():
+        out[point_uri].append((bucket, float(agg) if agg is not None else None))
+    return out
+
+
 def delete_point_value(conn: psycopg.Connection, point_uri: str, ts: datetime) -> bool:
     """The Haxall IHisExt side of `val == None.val`: a specific timestamp
     is removed outright, not overwritten with a null value. Returns

@@ -31,6 +31,7 @@ const ROUTES = [
   ["POST",   /^\/ingest\/part$/,                     "points", "operator"],
   ["GET",    /^\/ingest\/history$/,                  "points", "viewer"],
   ["DELETE", /^\/ingest\/history$/,                  "points", "operator"],
+  ["GET",    /^\/ingest\/his$/,                      "points", "viewer"],
 
   // fault_api
   ["POST",   /^\/fault\/rules$/,                     "rules", "operator"],

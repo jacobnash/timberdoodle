@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from rdflib import URIRef
 
-from timberdoodle import docs_ui, gateway_auth, tracing
+from timberdoodle import docs_ui, gateway_auth, hisquery, tracing
 from timberdoodle.http_handler_base import BaseAPIHandler
 from timberdoodle.http_handler_base import respond_error as _respond_error
 from timberdoodle.http_handler_base import respond_json as _respond_json
@@ -38,6 +38,11 @@ OPENAPI_SPEC_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "openapi
 # history" (IHisExt.read's span==null case) is just the widest span this
 # store could ever contain, not a separate no-bounds query path.
 _EPOCH_START = datetime.fromtimestamp(0, tz=timezone.utc)
+
+# Zone that `hisRead(today)` etc. resolve "today" in when a request doesn't
+# say (?tz=...). UTC, not the container's local zone, so the answer doesn't
+# silently change between a bare-metal run and docker compose.
+DEFAULT_TZ = os.environ.get("TIMBERDOODLE_TZ", "UTC")
 
 
 def make_handler(store, ts_pool):
@@ -187,9 +192,50 @@ def make_handler(store, ts_pool):
             if self.path.startswith("/history"):
                 self._get_history()
                 return
+            if self.path == "/his" or self.path.startswith("/his?"):
+                self._get_his()
+                return
 
             self.send_response(404)
             self.end_headers()
+
+        def _get_his(self) -> None:
+            """Axon-style `readAll(filter).hisRead(span)` over the live
+            graph + history - see hisquery.py for the grammar, ui/his.html
+            for the browser surface over this route."""
+            with tracer.start_as_current_span("ingest_api.get_his") as span:
+                query = parse_qs(urlparse(self.path).query)
+                expr = query.get("expr", [None])[0]
+                if not expr:
+                    _respond_error(self, 400, "missing required query param: expr (e.g. readAll(ahu).hisRead(today))")
+                    return
+                tz = query.get("tz", [DEFAULT_TZ])[0]
+                try:
+                    limit = int(query.get("limit", [hisquery.DEFAULT_LIMIT])[0])
+                except ValueError:
+                    _respond_error(self, 400, "limit must be an integer")
+                    return
+                if limit < 1 or limit > hisquery.MAX_LIMIT:
+                    _respond_error(self, 400, f"limit must be between 1 and {hisquery.MAX_LIMIT}")
+                    return
+                span.set_attribute("expr", expr)
+                span.set_attribute("tz", tz)
+
+                try:
+                    parsed = hisquery.parse_query(expr)
+                    with ts_pool.connection() as conn:
+                        result = hisquery.run_query(store, conn, parsed, now=datetime.now(timezone.utc), tz=tz, limit=limit)
+                except hisquery.NoMatchError as exc:
+                    span.set_attribute("error", str(exc))
+                    _respond_error(self, 404, str(exc))
+                    return
+                except hisquery.HisQueryError as exc:
+                    span.set_attribute("error", str(exc))
+                    _respond_error(self, 400, str(exc))
+                    return
+                span.set_attribute("matched", result["matchedCount"])
+                span.set_attribute("series", len(result["series"]))
+                _respond_json(self, 200, result)
 
         def do_DELETE(self):
             if not self._require_gateway():
