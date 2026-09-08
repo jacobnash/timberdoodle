@@ -278,12 +278,20 @@ paths:
 
         - **filter**: Haystack filter syntax - `ahu`, `air and temp and sensor`,
           `not vav`, `equipRef == @AHU-1`, `id == @urn:equip:fbf/ahu-1`,
-          `kind == "Bool"`, `temp > 72`, parentheses. A bare name matches a
-          marker tag (`haystack:hasTag`); a CapitalCase name also matches a
-          Brick/PROJ class (`Air_Handling_Unit`, `Zone_Air_Temperature_Sensor`).
-          `point`/`equip`/`site` also match on graph structure, since
-          BACnet-sourced entities never got those as explicit tags. Not
-          supported: `->` tag paths, arithmetic, unit conversion.
+          `kind == "Bool"`, `temp > 72`, parentheses. A name matches three
+          ways at once, so Brick-typed data needs no Brick spelling:
+          as a Haystack marker (`haystack:hasTag`); as a Brick class -
+          case-insensitive, with every subclass and Brick alias folded in
+          (`Temperature_Sensor` finds `Zone_Air_Temperature_Sensor`
+          points; `AHU`, `Air_Handling_Unit`, `air_handling_unit` all find
+          air handlers and rooftop units); and as a Brick *tag word*, the
+          words a class name is made of (`temperature and sensor`,
+          `zone and air and temp and sensor` - Haystack spellings `temp`,
+          `sp`, `cmd`, `equip` are mapped). Hierarchy comes from the vendored
+          `ontology/Brick-only.ttl`, so this works whether or not Brick is
+          loaded into the graph. `point`/`equip`/`site` also match on graph
+          structure, since BACnet-sourced entities never got those as explicit
+          tags. Not supported: `->` tag paths, arithmetic, unit conversion.
         - **span**: `today`, `yesterday`, `thisWeek`, `lastWeek`, `pastWeek`,
           `thisMonth`, `lastMonth`, `pastMonth`, `thisQuarter`, `lastQuarter`,
           `thisYear`, `lastYear`, `pastYear` (with or without `()`), a date
@@ -398,7 +406,7 @@ components:
             - type: "null"
     HisQueryResult:
       type: object
-      required: [expr, mode, filter, span, rollup, limit, matched, matchedCount, series]
+      required: [expr, mode, filter, span, rollup, limit, matched, matchedCount, hints, series]
       properties:
         expr:
           type: string
@@ -435,6 +443,22 @@ components:
           items: { type: string }
         matchedCount:
           type: integer
+        hints:
+          type: array
+          description: |
+            Only ever non-empty when `matchedCount` is 0: filter names that
+            are *almost* a Brick class or tag word (`Air_Handeling_Unit`,
+            `temperture`), with the nearest real ones. Never an error -
+            the name may be a valid Haystack marker or PROJ class the
+            vendored Brick can't know about.
+          items:
+            type: object
+            required: [token, suggestions]
+            properties:
+              token: { type: string }
+              suggestions:
+                type: array
+                items: { type: string }
         series:
           type: array
           items:

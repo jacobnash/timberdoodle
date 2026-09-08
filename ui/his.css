@@ -108,3 +108,7 @@
 .grid-wrap th small { display: block; color: var(--muted); font-weight: normal; }
 .grid-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; font-size: 0.8rem; color: var(--muted); }
 .grid-toolbar button { font: inherit; font-size: 0.8rem; padding: 0.2rem 0.6rem; cursor: pointer; }
+
+/* "did you mean" links under an empty result (hisquery.hints_for_empty_result) */
+.did-you-mean { color: inherit; }
+.did-you-mean a { font-weight: 600; }

@@ -47,6 +47,19 @@ function ensureReadAll(expr) {
   return `readAll(${filter})${chain}`;
 }
 
+// Swap one filter name for another, whole-token only (so fixing `temp`
+// never touches `temperature`); used by the did-you-mean links.
+function replaceName(expr, from, to) {
+  const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return expr.replace(new RegExp(`(^|[^A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, "g"), `$1${to}`);
+}
+
+function code(text) {
+  const el = document.createElement("code");
+  el.textContent = text;
+  return el;
+}
+
 function withSpan(expr, span) {
   expr = ensureReadAll(expr);
   if (HISREAD_RE.test(expr)) return expr.replace(HISREAD_RE, `.hisRead(${span})`);
@@ -185,7 +198,26 @@ function render() {
   state.charts = [];
   resultsEl.innerHTML = "";
   if (!pointCount) {
-    resultsEl.innerHTML = `<p class="hint">Nothing to chart - the filter matched no points. Try a marker tag that exists (<code>ahu</code>, <code>temp</code>), a Brick class (<code>Air_Handling_Unit</code>), or <code>point</code> for everything.</p>`;
+    resultsEl.innerHTML = `<p class="hint">Nothing to chart - the filter matched no points. Try the words a class name is made of (<code>zone and air and temperature</code>), a Brick class in any case (<code>air_handling_unit</code>, <code>Temperature_Sensor</code> - subclasses included), a Haystack marker (<code>ahu</code>, <code>temp</code>), or <code>point</code> for everything.</p>`;
+    for (const hint of r.hints || []) {
+      const p = document.createElement("p");
+      p.className = "hint did-you-mean";
+      p.append(`No Brick class or tag word spelled `, code(hint.token), ` - did you mean `);
+      hint.suggestions.forEach((s, i) => {
+        if (i) p.append(", ");
+        const a = document.createElement("a");
+        a.href = "#";
+        a.textContent = s;
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          exprEl.value = replaceName(exprEl.value, hint.token, s);
+          run();
+        });
+        p.appendChild(a);
+      });
+      p.append("?");
+      resultsEl.appendChild(p);
+    }
     return;
   }
   if (state.view === "grid") renderGrid(r);

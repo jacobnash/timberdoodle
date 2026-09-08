@@ -225,6 +225,50 @@ def test_computed_points_take_unit_and_label_from_their_history_rows(live_server
 
 
 @pytest.mark.integration
+def test_brick_only_entities_are_found_by_brick_words_classes_and_aliases(live_server, gw, ahu):
+    """An entity that only ever got Brick rdf:types - no Haystack tags at
+    all (a loaded Brick model, a derivation output) - must be reachable
+    with the words a person would type, through the real Oxigraph. Uses
+    the run's own equipment so the assertion is scoped, but the point is
+    typed brick:RTU (Brick's alias for Rooftop_Unit, a subclass of
+    Air_Handling_Unit) and never tagged."""
+    from timberdoodle import timeseries
+    from timberdoodle.store import BRICK
+    from timberdoodle.timeseries import connect
+
+    base_url, store = live_server
+    rtu = URIRef(f"urn:equip:brick/{ahu['run']}/rtu")
+    zt = URIRef(f"urn:point:brick/{ahu['run']}/rtu/zt")
+    store.add_entity(rtu, BRICK.RTU)
+    store.add_entity(zt, BRICK.Zone_Air_Temperature_Sensor)
+    link_point_to_equip(store, zt, rtu)
+    with connect() as conn:
+        timeseries.write_point_value(conn, str(zt), 71.5, datetime.now(timezone.utc) - timedelta(minutes=1))
+
+    def ids(expr):
+        return {s["id"] for s in _his(gw, base_url, expr).json()["series"]}
+
+    site_scope = f"id == @urn:equip:brick/{ahu['run']}/rtu"
+    # Class names, any case, alias or canonical, any ancestor - all expand the RTU to its point.
+    for expr in ("readAll(RTU and " + site_scope + ")", "readAll(rooftop_unit and " + site_scope + ")",
+                 "readAll(Air_Handling_Unit and " + site_scope + ")", "readAll(AHU and " + site_scope + ")",
+                 "readAll(Equipment and " + site_scope + ")"):
+        assert ids(expr) == {str(zt)}, expr
+    # Words - Brick's own and Haystack's - reach the untagged point directly.
+    for expr in ("Zone_Air_Temperature_Sensor", "Temperature_Sensor", "zone and air and temperature and sensor", "zone and temp and sensor"):
+        assert str(zt) in ids(f"readAll({expr})"), expr
+    assert str(zt) not in ids("readAll(setpoint)")
+    # `ahu` the marker word finds it too (Brick tag:AHU on Air_Handling_Unit's subtree) - and the tagged AHU alongside.
+    matched = _his(gw, base_url, f"readAll(ahu and ({site_scope} or {ahu['run']}))").json()["matched"]
+    assert set(matched) == {str(rtu), ahu["equip"]}
+
+    # Near-miss spelling: nothing matches, but the response says what was probably meant.
+    body = _his(gw, base_url, "readAll(Air_Handeling_Unit and temperture)").json()
+    assert body["matchedCount"] == 0
+    assert {h["token"]: h["suggestions"][0] for h in body["hints"]} == {"Air_Handeling_Unit": "Air_Handling_Unit", "temperture": "temperature"}
+
+
+@pytest.mark.integration
 def test_limit_truncates_per_point_and_flags_it(live_server, gw, ahu):
     base_url, _ = live_server
     body = _his(gw, base_url, f"readAll(ahu and {ahu['run']}).hisRead(today)", limit=2).json()

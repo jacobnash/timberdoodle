@@ -67,13 +67,16 @@
       </div>
       <p class="hint examples">
         Axon-style, straight off <a href="/api/ingest" target="_blank" rel="noopener"><code>GET /ingest/his</code></a>:
-        a Haystack filter picks points <em>or equipment</em> (equipment expands to all of its points),
+        a filter picks points <em>or equipment</em> (equipment expands to all of its points),
         <code>hisRead</code> picks the span, <code>hisRollup</code> folds long spans into buckets.
-        Try
+        Filter words are the words a Brick class is made of (<code>zone and air and temperature</code>),
+        a Brick class in any case with its subclasses (<code>temperature_sensor</code>, <code>AHU</code>),
+        or a Haystack marker (<code>ahu</code>, <code>temp</code>) - no need to know Brick's spelling. Try
         <a href="#" data-example="readAll(ahu).hisRead(today)">readAll(ahu).hisRead(today)</a>,
         <a href="#" data-example="readAll(air and temp and sensor).hisRead(pastWeek).hisRollup(avg, 1hr)">readAll(air and temp and sensor).hisRead(pastWeek).hisRollup(avg, 1hr)</a>,
         <a href="#" data-example="readAll(fan and run).hisRead(thisMonth).hisRollup(avg, 1day)">readAll(fan and run).hisRead(thisMonth).hisRollup(avg, 1day)</a>,
-        <a href="#" data-example="readAll(Zone_Air_Temperature_Sensor).hisRead(yesterday)">readAll(Zone_Air_Temperature_Sensor).hisRead(yesterday)</a>.
+        <a href="#" data-example="readAll(zone and temperature and setpoint).hisRead(yesterday)">readAll(zone and temperature and setpoint).hisRead(yesterday)</a>,
+        <a href="#" data-example="readAll(Temperature_Sensor).hisRead(today)">readAll(Temperature_Sensor).hisRead(today)</a>.
         Spans resolve in your browser's zone (<span id="tz"></span>).
       </p>
       <p id="error" class="field-error" hidden></p>

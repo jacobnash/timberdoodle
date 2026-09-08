@@ -171,7 +171,14 @@ ontology only matters if you want SPARQL queries that walk
 yourself to do it — it loads the vendored `ontology/Brick-only.ttl`
 (no external download needed) into `RemoteStore`'s dedicated ontology
 graph via `load_ontology`, then runs a `subClassOf*` query against the
-live store to prove it landed.
+live store to prove it landed. The one feature that needs Brick's
+hierarchy at query time — [the `readAll(...).hisRead(...)` filter](/his-query),
+where `Temperature_Sensor` must find every subclass — deliberately does
+*not* depend on this: `brick_vocab.py` reads the vendored
+`ontology/Brick-only.ttl` directly and hands SPARQL a bound class list,
+both because the ontology may not be loaded and because Oxigraph takes
+tens of seconds on an unbound `rdfs:subClassOf*` inside a filter when
+it is.
 
 ## The eight daemons
 

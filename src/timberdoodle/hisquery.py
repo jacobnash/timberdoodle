@@ -12,12 +12,17 @@ without live services:
                         text, optional rollup). Grammar in the docstring
                         of Parser below.
   2. compile_filter() - Haystack filter AST -> one SPARQL SELECT over the
-                        entity graph. Marker tags are haystack:hasTag
-                        triples (see ingest._write_tags), so `ahu` reads
-                        as "has the ahu marker"; a CapitalCase name also
-                        matches a Brick/PROJ rdf:type so `Air_Handling_Unit`
-                        works without knowing which tags mapping.py keyed
-                        the class off.
+                        entity graph. A name matches three ways at once:
+                        as a Haystack marker (haystack:hasTag, see
+                        ingest._write_tags); as a Brick class - with every
+                        subclass and Brick alias folded in, case-insensitive,
+                        so `Temperature_Sensor`, `AHU`, `air_handling_unit`
+                        all work; and as a Brick *tag word* - the words a
+                        class name is made of (brick:hasAssociatedTag), so
+                        `temperature and sensor` finds Brick-typed points
+                        that never had a Haystack tag. The hierarchy comes
+                        from the vendored ontology via brick_vocab.py, not
+                        from the live graph (see that module for why).
   3. resolve_span()  - Axon DateSpan vocabulary (today, thisMonth,
                         2026-09, 2026-09-01..2026-09-07, ...) -> a
                         half-open [start, end) pair of aware datetimes in
@@ -42,7 +47,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from timberdoodle import brick_vocab
 
 DEFAULT_SPAN = "today"
 
@@ -367,7 +375,51 @@ PREFIX brick: <https://brickschema.org/schema/Brick#>
 PREFIX proj: <urn:timberdoodle:proj#>
 PREFIX td: <urn:timberdoodle:td#>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX sh: <http://www.w3.org/ns/shacl#>
 """
+
+# If Brick itself has been loaded into the store (RemoteStore.load_ontology
+# - queried through Oxigraph's --union-default-graph), its ~10k
+# class/tag/shape subjects would otherwise all be filter candidates, and
+# `readAll(Tag)` would hand back Brick's tag vocabulary as if it were
+# equipment. Schema-level things aren't entities; drop them by what they
+# are, not by named graph, so the same SPARQL runs on the in-memory rdflib
+# Store (which can't evaluate GRAPH) as on Oxigraph.
+_SCHEMA_TYPES = (
+    "owl:Class", "owl:ObjectProperty", "owl:DatatypeProperty", "owl:AnnotationProperty", "owl:Ontology",
+    "rdfs:Datatype", "rdfs:Class", "sh:NodeShape", "sh:PropertyShape", "brick:Tag",
+)
+
+
+def _looks_like_class(name: str) -> bool:
+    """Brick classes are CapitalCase_With_Underscores; Haystack markers are
+    lowerCamel with no underscores. So any uppercase letter *or* an
+    underscore means "a class name" - which is what lets
+    `air_handling_unit` resolve case-insensitively without ever colliding
+    with a marker like `ahu`."""
+    return "_" in name or any(ch.isupper() for ch in name)
+
+
+@lru_cache(maxsize=1)
+def _rule_classes_by_tag() -> dict[str, frozenset[str]]:
+    """Inverse of rules/haystack_*_to_brick.yaml: a Haystack marker -> the
+    Brick classes this project's own mapping rules mint from tag sets
+    containing it. Sound in this direction (an entity mapping.py typed as
+    Fan_Status *was* `fan run sensor`), and it's what makes a marker like
+    `run` - which Brick has no tag word for - still find Brick-only points."""
+    from timberdoodle import mapping
+
+    out: dict[str, set[str]] = {}
+    for path in (mapping.DEFAULT_RULES_PATH, mapping.DEFAULT_RULES_PATH.replace("haystack_to_brick", "haystack_equip_to_brick")):
+        try:
+            rules = mapping.load_rules(path)
+        except FileNotFoundError:
+            continue
+        for rule in rules:
+            for tag in rule["tags"]:
+                out.setdefault(tag, set()).add(rule["brick_class"])
+    return {tag: frozenset(classes) for tag, classes in out.items()}
 
 # Structural markers every Haystack rec of that kind carries, but which a
 # BACnet/MQTT-sourced entity here never got as an explicit tag (FBF pushes
@@ -377,9 +429,9 @@ PREFIX owl: <http://www.w3.org/2002/07/owl#>
 # way a SkySpark user expects regardless of which source the data came
 # from.
 _STRUCTURAL_ALIASES = {
-    "point": ["EXISTS { ?s a td:RawPoint }", "EXISTS { ?s brick:isPointOf ?{v} }"],
-    "equip": ["EXISTS { ?s brick:hasPoint ?{v} }"],
-    "site": ["EXISTS { ?s a brick:Site }"],
+    "point": ["?s a td:RawPoint", "?s brick:isPointOf ?{v}"],
+    "equip": ["?s brick:hasPoint ?{v}"],
+    "site": ["?s a brick:Site"],
 }
 
 
@@ -408,13 +460,70 @@ def ref_to_equip_uri(ref: str) -> str:
 _SPARQL_OPS = {"==": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
 
 
+BRICK_NS = "https://brickschema.org/schema/Brick#"
+PROJ_NS = "urn:timberdoodle:proj#"
+
+
+def custom_subclass_map(store) -> dict[str, set[str]]:
+    """Every rdfs:subClassOf the live graph asserts about a class that
+    isn't Brick's own - in practice the PROJ classes mapping.py mints as
+    direct subclasses of a Brick class (urn:timberdoodle:proj#X). Keyed by
+    parent IRI -> child IRIs. One cheap query; folding this into the class
+    list handed to SPARQL is what lets the compiled filter stay a bare
+    `?s a ?c` (Oxigraph spends ~1s per query on `?t rdfs:subClassOf ?c`
+    inside EXISTS with the full ontology loaded, whatever the list size)."""
+    rows = store.query(
+        PREFIXES
+        + f"""SELECT ?sub ?sup WHERE {{
+            ?sub rdfs:subClassOf ?sup .
+            FILTER(isIRI(?sub) && isIRI(?sup) && !STRSTARTS(STR(?sub), "{BRICK_NS}"))
+        }}"""
+    )
+    out: dict[str, set[str]] = {}
+    for row in rows:
+        out.setdefault(str(row.sup), set()).add(str(row.sub))
+    return out
+
+
 class _Compiler:
-    def __init__(self):
+    """Every leaf test (a tag, a class, a comparison) becomes a *set of
+    subjects* - `OPTIONAL { { SELECT DISTINCT ?s (true AS ?mK) WHERE {...}
+    } }` - and the boolean expression is composed from `BOUND(?mK)`.
+    Each set is computed once and hash-joined to the candidates, so cost
+    is O(matching triples), not O(candidates x list size): the same query
+    that took 0.4-5s as per-candidate EXISTS clauses is a flat ~0.15s
+    here, whether the class list has 5 entries or 1,400. `not` is just
+    `!BOUND`, and a comparison on a missing tag is unbound, i.e. false -
+    Haystack's semantics for free."""
+
+    def __init__(self, custom_subclasses: dict[str, set[str]] | None = None):
         self.n = 0
+        self.custom_subclasses = custom_subclasses or {}
+        self.flags: list[tuple[str, str]] = []  # (flag var, pattern that binds ?s)
+
+    def _with_custom_descendants(self, class_iris: set[str]) -> set[str]:
+        out, stack = set(), list(class_iris)
+        while stack:
+            iri = stack.pop()
+            if iri in out:
+                continue
+            out.add(iri)
+            stack.extend(self.custom_subclasses.get(iri, ()))
+        return out
 
     def _var(self) -> str:
         self.n += 1
         return f"v{self.n}"
+
+    def _flag(self, pattern: str) -> str:
+        """Register a subject-set and return the boolean expression that
+        tests membership."""
+        m = f"m{len(self.flags) + 1}"
+        self.flags.append((m, pattern))
+        return f"BOUND(?{m})"
+
+    def _any(self, exprs: list[str]) -> str:
+        return exprs[0] if len(exprs) == 1 else "(" + " || ".join(exprs) + ")"
 
     def expr(self, node) -> str:
         if isinstance(node, Has):
@@ -429,16 +538,45 @@ class _Compiler:
             return f"({self.expr(node.left)} || {self.expr(node.right)})"
         raise HisQueryError(f"cannot compile {node!r}")
 
+    def _typed_as_any(self, class_iris: set[str]) -> str:
+        """`?s` is typed as one of these classes or anything the live graph
+        declares beneath them (PROJ classes). Every hop of hierarchy is
+        resolved before SPARQL sees it - Brick's own from brick_vocab, the
+        graph's from custom_subclass_map - so this is a bound VALUES list
+        and a single `?s a ?c`. Any formulation that walks rdfs:subClassOf
+        inside the query measured 1s-50s on Oxigraph with the full
+        ontology loaded."""
+        c = self._var()
+        iris = self._with_custom_descendants(class_iris)
+        members = " ".join(f"<{iri}>" for iri in sorted(iris))
+        return self._flag(f"VALUES ?{c} {{ {members} }} ?s a ?{c}")
+
     def _has(self, name: str) -> str:
-        parts = [f"EXISTS {{ ?s haystack:hasTag {_sparql_string(name)} }}"]
-        if name[0].isupper():
-            # Brick classes are CapitalCase (Air_Handling_Unit); PROJ
-            # fallback classes mapping.py mints inherit that shape.
-            parts.append(f"EXISTS {{ ?s a brick:{name} }}")
-            parts.append(f"EXISTS {{ ?s a proj:{name} }}")
+        vocab = brick_vocab.load()
+        parts = [self._flag(f"?s haystack:hasTag {_sparql_string(name)}")]
+        if _looks_like_class(name):
+            canonical = vocab.canonical_class(name)
+            # Air_Handling_Unit also finds Rooftop_Unit, DOAS, ... and
+            # entities typed with Brick's own alias brick:AHU. A name Brick
+            # doesn't know (a PROJ class, a newer Brick, an ontology-less
+            # deployment) is matched as an exact brick:/proj: type.
+            brick_names = vocab.descendants(canonical) if canonical else {name}
+            parts.append(self._typed_as_any({BRICK_NS + n for n in brick_names} | {PROJ_NS + name}))
+        else:
+            # A plain word: Brick's own tag vocabulary (`temperature`,
+            # `setpoint`, `ahu`) with Haystack spellings mapped (`temp`,
+            # `sp`, `cmd`), plus this project's mapping rules run backwards.
+            classes: set[str] = set()
+            tag = vocab.canonical_tag(name)
+            if tag:
+                classes |= vocab.classes_with_tag(tag)
+            for cls in _rule_classes_by_tag().get(name, ()):
+                classes |= vocab.descendants(cls) or {cls}
+            if classes:
+                parts.append(self._typed_as_any({BRICK_NS + n for n in classes}))
         for alias in _STRUCTURAL_ALIASES.get(name, []):
-            parts.append(alias.replace("{v}", self._var()))
-        return "(" + " || ".join(parts) + ")"
+            parts.append(self._flag(alias.replace("{v}", self._var())))
+        return self._any(parts)
 
     def _cmp(self, node: Cmp) -> str:
         if node.name == "id":
@@ -454,16 +592,16 @@ class _Compiler:
 
         if isinstance(node.value, Ref):
             v = self._var()
-            parts = [f"EXISTS {{ ?s haystack:{node.name} ?{v} . FILTER(STR(?{v}) = {_sparql_string(node.value.id)}) }}"]
+            parts = [self._flag(f"?s haystack:{node.name} ?{v} . FILTER(STR(?{v}) = {_sparql_string(node.value.id)})")]
             if node.name == "equipRef":
-                parts.append(f"EXISTS {{ ?s brick:isPointOf <{_uri(ref_to_equip_uri(node.value.id))}> }}")
-            e = "(" + " || ".join(parts) + ")"
+                parts.append(self._flag(f"?s brick:isPointOf <{_uri(ref_to_equip_uri(node.value.id))}>"))
+            e = self._any(parts)
             return e if node.op == "==" else f"(!{e})"
 
         v = self._var()
         # A comparison on a missing tag is false in Haystack (so `x != 1`
-        # doesn't match recs with no x at all) - EXISTS gives exactly that.
-        return f"EXISTS {{ ?s haystack:{node.name} ?{v} . FILTER(?{v} {_SPARQL_OPS[node.op]} {_sparql_literal(node.value)}) }}"
+        # doesn't match recs with no x at all) - an unbound flag is exactly that.
+        return self._flag(f"?s haystack:{node.name} ?{v} . FILTER(?{v} {_SPARQL_OPS[node.op]} {_sparql_literal(node.value)})")
 
 
 def _uri(text: str) -> str:
@@ -472,19 +610,66 @@ def _uri(text: str) -> str:
     return text
 
 
-def compile_filter(node) -> str:
-    """One SELECT over every distinct subject in the graph, filtered by
-    the whole boolean expression at once. Every tag test is an EXISTS
-    sub-pattern, so and/or/not compose as plain SPARQL &&/||/! with no
-    OPTIONAL/MINUS juggling - the filter AST maps onto it one-to-one."""
-    body = _Compiler().expr(node)
+def compile_filter(node, custom_subclasses: dict[str, set[str]] | None = None) -> str:
+    """One SELECT over every entity subject in the graph. Each leaf test
+    of the filter is a subject-set (see _Compiler), left-joined once;
+    the whole boolean expression is one FILTER over those flags, so
+    and/or/not compose as plain SPARQL &&/||/! with no MINUS juggling.
+
+    `custom_subclasses` is custom_subclass_map(store) - pass it when
+    compiling against a live store so PROJ classes count as their Brick
+    parent; parse_query compiles without it purely to surface errors."""
+    compiler = _Compiler(custom_subclasses)
+    body = compiler.expr(node)
+    flags = "\n".join(
+        f"  OPTIONAL {{ {{ SELECT DISTINCT ?s (true AS ?{m}) WHERE {{ {pattern} }} }} }}"
+        for m, pattern in compiler.flags
+    )
     return (
         PREFIXES
         + "SELECT DISTINCT ?s WHERE {\n"
-        + "  { SELECT DISTINCT ?s WHERE { ?s ?p ?o } }\n"
+        + "  { SELECT DISTINCT ?s WHERE { ?s ?p ?o . FILTER(isIRI(?s))\n"
+        + f"      FILTER NOT EXISTS {{ ?s a ?schema . FILTER(?schema IN ({', '.join(_SCHEMA_TYPES)})) }} }} }}\n"
+        + (flags + "\n" if flags else "")
         + f"  FILTER({body})\n"
         + "}"
     )
+
+
+def _has_names(node) -> list[str]:
+    if isinstance(node, Has):
+        return [node.name]
+    if isinstance(node, Not):
+        return _has_names(node.node)
+    if isinstance(node, (And, Or)):
+        return _has_names(node.left) + _has_names(node.right)
+    return []
+
+
+def hints_for_empty_result(node) -> list[dict]:
+    """Why might this filter have matched nothing? Only Brick-vocabulary
+    answers - a class name Brick doesn't have but nearly does
+    (Air_Handeling_Unit), a word that's almost a Brick tag (temperture).
+    Never raised as an error: the name may be a perfectly good Haystack
+    marker or PROJ class this file can't know about."""
+    vocab = brick_vocab.load()
+    hints = []
+    seen = set()
+    for name in _has_names(node):
+        if name in seen or name in _STRUCTURAL_ALIASES:
+            continue
+        seen.add(name)
+        if _looks_like_class(name):
+            if vocab.canonical_class(name):
+                continue
+            suggestions = vocab.suggest_class(name)
+        else:
+            if vocab.canonical_tag(name) or name in _rule_classes_by_tag():
+                continue
+            suggestions = vocab.suggest_tag(name)
+        if suggestions:
+            hints.append({"token": name, "suggestions": suggestions})
+    return hints
 
 
 # --- spans -----------------------------------------------------------------
@@ -644,7 +829,7 @@ def _infer_kind(rows) -> str | None:
 
 
 def match_entities(store, node) -> list[str]:
-    rows = store.query(compile_filter(node))
+    rows = store.query(compile_filter(node, custom_subclass_map(store)))
     return sorted(str(row.s) for row in rows)
 
 
@@ -800,6 +985,7 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
         "limit": limit,
         "matched": matched[:_MATCHED_PREVIEW],
         "matchedCount": len(matched),
+        "hints": hints_for_empty_result(query.filter) if not matched else [],
         "series": series,
     }
 

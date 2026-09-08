@@ -10,7 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
-from rdflib import RDF, Literal, URIRef
+from rdflib import OWL, RDF, RDFS, Literal, Namespace, URIRef
 
 from timberdoodle import hisquery as h
 from timberdoodle.store import BRICK, HAYSTACK, TD, Store
@@ -195,6 +195,11 @@ DAT = URIRef("urn:point:fbf/ahu-1/dat")
 FAN = URIRef("urn:point:fbf/ahu-1/fan")
 ZT = URIRef("urn:point:fbf/vav-1/zt")
 HX_ZT = URIRef("urn:point:hx/VAV-9/zt")
+B_RTU = URIRef("urn:equip:brick/rtu-7")
+B_ZT = URIRef("urn:point:brick/rtu-7/zt")
+B_FAN = URIRef("urn:point:brick/rtu-7/fan")
+PROJ = Namespace("urn:timberdoodle:proj#")
+TAG = Namespace("https://brickschema.org/schema/BrickTag#")
 
 
 @pytest.fixture
@@ -215,6 +220,19 @@ def graph():
         # tag (no brick:isPointOf yet - link_equip_ref hasn't run).
         (HX_ZT, HAYSTACK.hasTag, Literal("point")), (HX_ZT, HAYSTACK.hasTag, Literal("zone")), (HX_ZT, HAYSTACK.equipRef, Literal("VAV-9")),
         (HX_VAV, HAYSTACK.hasTag, Literal("vav")), (HX_VAV, HAYSTACK.hasTag, Literal("equip")),
+        # --- Brick-only: typed, never tagged (a loaded Brick model, or a
+        # derivation_engine point) - the case "Brick is hard to query" is about.
+        (B_RTU, RDF.type, BRICK.RTU),  # Brick's alias for Rooftop_Unit, itself under Air_Handling_Unit
+        (B_RTU, BRICK.hasPoint, B_ZT), (B_RTU, BRICK.hasPoint, B_FAN),
+        (B_ZT, RDF.type, BRICK.Zone_Air_Temperature_Sensor), (B_ZT, BRICK.isPointOf, B_RTU),
+        # mapping.py's PROJ fallback: a project class one rdfs:subClassOf below a Brick class.
+        (B_FAN, RDF.type, PROJ.Fan_Status_Variant), (B_FAN, BRICK.isPointOf, B_RTU),
+        (PROJ.Fan_Status_Variant, RDFS.subClassOf, BRICK.Fan_Status),
+        # Ontology-level subjects, as if Brick itself were loaded into the store:
+        # schema, not entities - must never come back from a filter.
+        (BRICK.Zone_Air_Temperature_Sensor, RDF.type, OWL.Class),
+        (BRICK.Zone_Air_Temperature_Sensor, RDFS.subClassOf, BRICK.Air_Temperature_Sensor),
+        (TAG.Temperature, RDF.type, BRICK.Tag),
     ])
     return s
 
@@ -226,29 +244,68 @@ def _match(graph, text):
 @pytest.mark.parametrize(
     "text, expected",
     [
-        ("ahu", [AHU]),
-        ("Air_Handling_Unit", [AHU]),  # Brick class, not a tag
-        ("temp and air", [DAT]),
-        ("temp and not air", [ZT]),
-        ("zone and not temp", [HX_ZT]),
+        # --- Haystack markers and value tags, as written by ingest ---
         ("temp and not (air or zone)", []),
-        ("discharge or fan", [DAT, FAN]),
+        ("discharge or fan", [DAT, FAN, B_FAN]),  # B_FAN: Fan_Status carries Brick tag:Fan
         ("temp > 70", [ZT]),
         ("temp > 80", []),
         ("temp != 72.5", []),  # a missing tag never satisfies a comparison
         ('dis == "Fan Status"', [FAN]),
         ('kind == "Bool"', [FAN]),
-        ("point", [DAT, FAN, ZT, HX_ZT]),  # structural alias covers BACnet points with no `point` tag
-        ("equip", [AHU, VAV, HX_VAV]),
         ("id == @urn:equip:fbf/vav-1", [VAV]),
-        ("point and id != @urn:point:fbf/ahu-1/dat", [FAN, ZT, HX_ZT]),
         ("equipRef == @urn:equip:fbf/ahu-1", [DAT, FAN]),  # full URI -> brick:isPointOf
         ("equipRef == @VAV-9", [HX_ZT]),  # bare Haystack id -> equipRef literal
-        ("point and equipRef != @urn:equip:fbf/ahu-1", [ZT, HX_ZT]),
+        # --- the same words also reach Brick-only entities (B_*: typed, never tagged) ---
+        ("ahu", [AHU, B_RTU]),  # marker on AHU; Brick tag:AHU on RTU (via Rooftop_Unit <- Air_Handling_Unit)
+        ("temp and air", [DAT, B_ZT]),  # `temp` is Haystack for Brick's tag:Temperature
+        ("temp and not air", [ZT]),
+        ("zone and not temp", [HX_ZT]),
+        ("zone and air and temp and sensor", [B_ZT]),  # every word from the class name Zone_Air_Temperature_Sensor
+        ("temperature and sensor", [DAT, B_ZT]),  # Brick's own spelling; DAT is typed Discharge_Air_Temperature_Sensor
+        ("fan and run", [B_FAN]),  # no Brick tag for `run`: rules/haystack_to_brick.yaml [fan, run, sensor] -> Fan_Status, inverted
+        ("point", [DAT, FAN, ZT, HX_ZT, B_ZT, B_FAN]),
+        ("equip", [AHU, VAV, HX_VAV, B_RTU]),
+        ("point and id != @urn:point:fbf/ahu-1/dat", [FAN, ZT, HX_ZT, B_ZT, B_FAN]),
+        ("point and equipRef != @urn:equip:fbf/ahu-1", [ZT, HX_ZT, B_ZT, B_FAN]),
+        # --- Brick class names: hierarchy, aliases, case ---
+        ("Air_Handling_Unit", [AHU, B_RTU]),  # B_RTU is typed brick:RTU, an alias of a *subclass*
+        ("AHU", [AHU, B_RTU]),  # Brick's alias name for the class
+        ("air_handling_unit", [AHU, B_RTU]),  # case-insensitive
+        ("Rooftop_Unit", [B_RTU]),
+        ("Temperature_Sensor", [DAT, B_ZT]),  # subclasses
+        ("Zone_Air_Temperature_Sensor", [B_ZT]),
+        ("Fan_Status", [B_FAN]),  # via the PROJ subclass the graph declares
+        ("Fan_Status_Variant", [B_FAN]),  # the PROJ class by its own name
+        ("Point", [DAT, B_ZT, B_FAN]),  # rdf:type-based; FAN/ZT/HX_ZT carry no Brick type
+        ("Equipment", [AHU, B_RTU]),
+        ("Sensor and not Temperature_Sensor", []),
+        ("Not_A_Brick_Class", []),
     ],
 )
 def test_compiled_filter_selects_the_right_entities(graph, text, expected):
     assert _match(graph, text) == sorted(str(u) for u in expected)
+
+
+def test_ontology_subjects_are_never_entities(graph):
+    # brick:Zone_Air_Temperature_Sensor and tag:Temperature are in the graph
+    # (as a loaded ontology would put them) - `Class`/`Tag` must not list them.
+    for text in ("Class", "Tag", "Zone_Air_Temperature_Sensor", "temperature"):
+        assert not any(uri.startswith("https://brickschema.org/") for uri in _match(graph, text)), text
+
+
+def test_hints_name_near_miss_brick_vocabulary_only_when_nothing_matched():
+    hints = h.hints_for_empty_result(h.parse_query("Air_Handeling_Unit and temperture and hisqRunMarker").filter)
+    assert {hint["token"]: hint["suggestions"][0] for hint in hints} == {"Air_Handeling_Unit": "Air_Handling_Unit", "temperture": "temperature"}
+    # A valid class, tag word, Haystack rule marker, or structural alias is never "corrected".
+    assert h.hints_for_empty_result(h.parse_query("Air_Handling_Unit and temp and run and point").filter) == []
+
+
+def test_compiled_sparql_never_walks_the_hierarchy_in_the_query(graph):
+    # Oxigraph takes 1-50s on rdfs:subClassOf paths inside a filter with the
+    # full ontology loaded; every hop is resolved in Python beforehand.
+    sparql = h.compile_filter(h.parse_query("Temperature_Sensor and temperature").filter, h.custom_subclass_map(graph))
+    assert "subClassOf" not in sparql and "EXISTS" not in sparql.split("FILTER NOT EXISTS", 1)[1]
+    assert "Zone_Air_Temperature_Sensor" in sparql and "Fan_Status_Variant" not in sparql
 
 
 def test_string_values_are_escaped_not_interpolated(graph):

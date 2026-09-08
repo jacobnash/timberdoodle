@@ -31,10 +31,11 @@ value    := "string" | number | true | false | @ref
 Some real ones:
 
 ```
-readAll(ahu and air).hisRead(thisMonth)              every point on every AHU, this month
+readAll(ahu).hisRead(thisMonth)                      every point on every air handler, this month
+readAll(zone and air and temperature).hisRead(today) every zone air temperature point, by the words
 read(vav and zone).hisRead(yesterday)                the first VAV zone point only
 ahu and temp                                         bare filter — readAll(...).hisRead(today)
-readAll(Air_Handling_Unit).hisRead(2026-09-01..2026-09-07)
+readAll(temperature_sensor).hisRead(2026-09-01..2026-09-07)   any-case Brick class, subclasses included
 readAll(point and unit == "kW").hisRead(pastWeek).hisRollup(avg, 1hr)
 readAll(id == @site1).hisRead(2026-08)
 readAll(temp and not air).hisRead(lastWeek).hisRollup(max, 1day)
@@ -42,23 +43,61 @@ readAll(temp and not air).hisRead(lastWeek).hisRollup(max, 1day)
 
 ### The filter
 
-The filter is Haystack's filter grammar — `and`/`or`/`not`, parentheses, marker tags by name,
-and `tag <op> value` comparisons with `==`, `!=`, `<`, `<=`, `>`, `>=`. It compiles to a single
+The filter is Haystack's filter grammar — `and`/`or`/`not`, parentheses, names, and
+`tag <op> value` comparisons with `==`, `!=`, `<`, `<=`, `>`, `>=`. It compiles to a single
 SPARQL `SELECT DISTINCT ?s` over the entity graph, which is what makes it fast enough to type
 against interactively; `hisquery.compile_filter()` is the whole compiler if you want to see the
 translation.
 
-What a bare name means, in order of what's checked:
+#### Querying Brick without knowing Brick
 
-- **A marker tag** — `ahu`, `air`, `temp`, `sensor`, `zone`... anything ingest wrote as a
-  `haystack:hasTag` triple (that's every marker a source sent, verbatim). `ahu and air` is "has
-  both markers."
-- **A Brick or PROJ class** — a `CapitalCase` name like `Air_Handling_Unit` or
-  `Zone_Air_Temperature_Sensor` also matches `rdf:type`, so you can query by the class
-  `mapping.py` assigned without knowing which tags it keyed off.
-- **Structural aliases** — `point`, `equip`, and `site` match on the graph's shape (has a
-  `brick:hasPoint`/is a `brick:Point`, and so on), not only on the literal marker, so a point that
-  arrived with no `point` marker still counts.
+Timberdoodle's entities are Brick-typed, and Brick is hard to query by hand: the class names
+are long (`Zone_Air_Temperature_Sensor`), the hierarchy matters (a `Temperature_Sensor` query
+that misses every subclass is useless), there are aliases (`AHU` is `Air_Handling_Unit`,
+`Discharge_Air_Temperature_Sensor` is `Supply_Air_Temperature_Sensor`), and a plain word like
+`temperature` isn't a class at all. The filter absorbs all of that. A bare name is matched
+**three ways at once**, and an entity that satisfies any of them counts:
+
+- **As a Brick tag word.** Brick attaches a tag vocabulary to every class — the words the class
+  name is made of (`Zone_Air_Temperature_Sensor` carries `Zone`, `Air`, `Temperature`, `Sensor`,
+  `Point`; `Air_Handling_Unit` carries `AHU`, `Air`, `Handling`, `Unit`, `Equipment`). So
+  `zone and air and temperature and sensor` finds every zone air temperature sensor, whatever
+  class it was typed with, and `ahu` finds air handlers *and* rooftop units, with no Haystack
+  tag anywhere. Haystack's spellings where they differ from Brick's are mapped: `temp`,
+  `sp`, `cmd`, `equip`, `elec`, `occ` mean `Temperature`, `Setpoint`, `Command`, `Equipment`,
+  `Electrical`, `Occupancy`. Aliases and deprecated classes inherit the tags of what they
+  point at, so nothing is left out for lack of its own tag list. And the project's own
+  tag→class mapping rules (`rules/haystack_*_to_brick.yaml`) run backwards too — `run` has no
+  Brick word, but `[fan, run, sensor] → Fan_Status` means `fan and run` still finds every
+  `Fan_Status` point.
+- **As a Brick class, with its whole subtree.** Any name with an uppercase letter or an
+  underscore is a class name, matched **case-insensitively** and including every subclass and
+  every alias: `Temperature_Sensor` (or `temperature_sensor`) finds the discharge, return, mixed,
+  outside and zone air temperature sensors; `Air_Handling_Unit`, `AHU`, and `air_handling_unit`
+  all find air handlers, rooftop units, DOAS units, and anything typed with Brick's alias
+  classes. The PROJ fallback classes `mapping.py` mints (`proj:Fan_Status_Variant`, a direct
+  `rdfs:subClassOf` of a Brick class) count as their parent.
+- **As a Haystack marker.** `ahu`, `air`, `temp`, `sensor`, `zone`... anything ingest wrote as a
+  `haystack:hasTag` triple (every marker a source sent, verbatim). This is what a Haystack-fed
+  point has; the two ways above are what a Brick-only entity (a loaded model, a derivation
+  output) has. Mixed data works because the same word means the same thing through all three.
+- **Structural aliases** — `point`, `equip`, and `site` also match on the graph's shape (has a
+  `brick:hasPoint`, is a `brick:isPointOf` something, and so on), so a BACnet point that arrived
+  with no `point` marker and no class still counts.
+
+Hierarchy, aliases and tag words come from the vendored `ontology/Brick-only.ttl` (1.4.4), read
+once per process by `brick_vocab.py` — **not** from the live graph. That's deliberate: nothing
+in `docker-compose.yml` loads Brick into Oxigraph (see [Architecture](/architecture)), and even
+when it is loaded, Oxigraph takes tens of seconds on an `rdfs:subClassOf*` walk inside a
+filter over the full ontology. Every hop is resolved in Python and handed to SPARQL as a bound
+class list instead, so a filter is ~0.15s whether it names 5 classes or 1,400. The only
+hierarchy read from the live graph is the graph's own: the `rdfs:subClassOf` triples under
+PROJ classes (one cheap query).
+
+When a filter matches nothing and a name is *almost* a Brick class or tag word, the response
+carries `hints` — `Air_Handeling_Unit` → `Air_Handling_Unit`, `temperture` → `temperature` —
+and the UI shows them as "did you mean" links. It's never an error: the name may be a perfectly
+good Haystack marker or PROJ class the vendored Brick can't know about.
 
 Comparisons: `dis == "AHU-1"`, `unit == "°F"`, `kind != "Bool"` compare `haystack:*` value tags
 as-is; `id == @some-id` matches the entity's own id (and it's the only thing `id` may be compared
@@ -222,6 +261,10 @@ to close — see `todo/skyspark-haxall-migration-gaps.md` in the repo.
   and `run_query()`, which strings them together. Each stage is a pure function so
   `tests/test_hisquery.py` runs the parser, compiler (against an in-memory `rdflib` graph), and
   span math with no services.
+- `src/timberdoodle/brick_vocab.py` — Brick's class hierarchy, aliases, and per-class tag words,
+  parsed from the vendored `ontology/Brick-only.ttl` once per process; `tests/test_brick_vocab.py`
+  pins the facts the compiler relies on against the real file, so a Brick version bump that
+  changes the file's shape fails loudly.
 - `src/timberdoodle/timeseries.py` — `read_range_many()` (raw, multi-point, per-point limit),
   `read_rollup()` (`date_bin`/`date_trunc` aggregation), `read_point_labels()` (unit/label
   fallback from history rows, for derivation-engine points that carry no graph tags).

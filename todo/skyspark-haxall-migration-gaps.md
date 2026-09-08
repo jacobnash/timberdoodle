@@ -273,21 +273,45 @@ day-two gap.
   span timezone via `TIMBERDOODLE_TZ`. The one deliberate non-Axon behavior: matched
   *equipment* expands to its points (Axon errors on `read(ahu).hisRead(...)`) - that's the
   whole point of the feature.
+- **Brick without the Brick spelling (2026-09-08, same pass):** the first cut matched a Brick
+  class only by exact, case-sensitive `rdf:type` and a plain word only as a Haystack marker —
+  so a Brick-only entity (loaded model, derivation output) was unreachable unless you knew
+  `Zone_Air_Temperature_Sensor` verbatim, and `Temperature_Sensor` found no subclasses. Now
+  `src/timberdoodle/brick_vocab.py` parses the vendored `ontology/Brick-only.ttl` (1,428
+  classes, 531 tag words, ~70 ms, regex over the release's rdflib serialization) and the
+  compiler matches every name three ways: as Brick's per-class tag words
+  (`brick:hasAssociatedTag` — `zone and air and temperature and sensor`, `ahu`, with Haystack
+  `temp`/`sp`/`cmd`/`equip` mapped, and `rules/haystack_*_to_brick.yaml` inverted so `run` →
+  `Fan_Status`), as a case-insensitive class with its full subtree and `owl:equivalentClass`/
+  `brick:isReplacedBy` aliases (`AHU` = `air_handling_unit` ⊇ `Rooftop_Unit`), and as a marker.
+  Every hierarchy hop is resolved in Python and handed to SPARQL as a bound VALUES list joined
+  once per leaf test (`OPTIONAL { SELECT DISTINCT ?s (true AS ?m) ... }` + `BOUND(?m)` flags):
+  measured against the full ontology loaded into Oxigraph, an unbound `rdfs:subClassOf*` inside
+  a filter takes 50+ s, per-candidate `EXISTS` with a VALUES list 0.4–5 s, this shape a flat
+  ~0.15 s for any list size. Ontology-level subjects (`owl:Class`, `brick:Tag`, `sh:NodeShape`)
+  are excluded from candidates by type so `readAll(Tag)` can't return Brick's vocabulary as
+  equipment. Empty results carry `hints` (`Air_Handeling_Unit` → `Air_Handling_Unit`) that the
+  UI renders as did-you-mean links. `tests/test_brick_vocab.py` pins the file facts relied on.
 - **Test coverage:** `tests/test_hisquery.py` (parser, compiler against an in-memory rdflib
-  graph, span math including leap years/year rollover, interval parsing, documented 400s — no
-  services) and `tests/test_his_route.py` (integration: equipment expansion, `read` 404,
-  rollup arithmetic incl. boolean folding, per-point `limit`/`truncated`, `tz` shifting,
-  derivation-engine points taking unit/label from history rows).
+  graph including Brick-only/PROJ-typed/ontology-subject fixtures, span math including leap
+  years/year rollover, interval parsing, documented 400s, hints — no services),
+  `tests/test_brick_vocab.py` (hierarchy/alias/tag facts against the vendored file), and
+  `tests/test_his_route.py` (integration: equipment expansion, `read` 404, rollup arithmetic
+  incl. boolean folding, per-point `limit`/`truncated`, `tz` shifting, derivation-engine points
+  taking unit/label from history rows, a never-tagged `brick:RTU` found by `AHU`/`rooftop_unit`/
+  `zone and temp and sensor` through live Oxigraph).
 - **Not done, deliberately:** tag paths (`equipRef->dis`), arithmetic, any Axon function beyond
   the two, unit-aware comparisons (`temp > 72°F` compares the bare 72), time-of-day spans. Each
   is an explicit 400 naming what was rejected, never a silent approximation. Item 6's converter
   still stubs `hisRead`/`readAll` — wiring it to emit `hisquery.run_query(...)` calls for the
   subset this now covers is the obvious follow-on, not done here.
-- **Files:** `src/timberdoodle/hisquery.py` (new), `src/timberdoodle/timeseries.py`,
-  `src/timberdoodle/ingest_api.py`, `openapi.yaml`, `gateway/njs/policy.js`, `ui/his.html`,
-  `ui/his.js`, `ui/his.css` (new), `ui/app.js`, `ui/style.css`, every `ui/*.html` nav,
-  `tests/test_hisquery.py`, `tests/test_his_route.py` (new), `docs-site/pages/his-query.mdx`
-  (new), `docs-site/zudoku.config.tsx`, `README.md`, `.env.example`, `docker-compose.yml`.
+- **Files:** `src/timberdoodle/hisquery.py`, `src/timberdoodle/brick_vocab.py` (new),
+  `src/timberdoodle/timeseries.py`, `src/timberdoodle/ingest_api.py`, `openapi.yaml`,
+  `gateway/njs/policy.js`, `ui/his.html`, `ui/his.js`, `ui/his.css` (new), `ui/app.js`,
+  `ui/style.css`, every `ui/*.html` nav, `tests/test_hisquery.py`, `tests/test_brick_vocab.py`,
+  `tests/test_his_route.py` (new), `docs-site/pages/his-query.mdx` (new),
+  `docs-site/pages/architecture.mdx`, `docs-site/zudoku.config.tsx`, `README.md`,
+  `.env.example`, `docker-compose.yml`.
 
 ## Explicitly out of scope for this backlog
 

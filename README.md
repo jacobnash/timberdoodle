@@ -165,8 +165,13 @@ existing admin account — create one first with `POST /auth/orgs` (see
 The SkySpark reflex — type one line, see every point on a piece of
 equipment charted — is `GET /ingest/his` plus `ui/his.html`
 (localhost:8080/ui/his.html through the gateway, `Query` in the top nav).
-The expression is Axon-shaped: a Haystack tag filter (`and`/`or`/`not`,
-marker tags, Brick class names, `tag == value`), then `.hisRead(span)`
+The expression is Axon-shaped: a tag filter (`and`/`or`/`not`,
+`tag == value`) whose words work the way people talk about Brick data
+rather than the way Brick spells it - `zone and air and temperature`
+matches by the words a class name is made of, `temperature_sensor` /
+`AHU` / `Air_Handling_Unit` match a class in any case with all its
+subclasses and aliases, and Haystack markers (`ahu`, `temp`) still work
+on tagged data - then `.hisRead(span)`
 with Axon's span words (`today`, `yesterday`, `thisWeek`, `lastMonth`,
 `2026-09`, `2026-09-01..2026-09-07`, ...) and an optional
 `.hisRollup(avg, 1hr)` that aggregates server-side in SQL. Matched
