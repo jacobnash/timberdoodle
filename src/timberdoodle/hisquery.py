@@ -709,7 +709,8 @@ def describe_points(store, point_uris: list[str]) -> dict[str, dict]:
         topic = getattr(row, "topic_", None)
         equip = getattr(row, "equip_", None)
         equip = str(equip) if equip else None
-        dis = getattr(row, "dis_", None) or (str(topic).rsplit("/", 1)[-1] if topic else _local_name(uri))
+        dis_tag = getattr(row, "dis_", None)
+        dis = dis_tag or (str(topic).rsplit("/", 1)[-1] if topic else _local_name(uri))
         equip_dis = getattr(row, "equipDis_", None) or (equip.replace("urn:equip:", "", 1) if equip else None)
         unit = getattr(row, "unit_", None)
         kind = getattr(row, "kind_", None)
@@ -717,6 +718,7 @@ def describe_points(store, point_uris: list[str]) -> dict[str, dict]:
             "id": uri,
             "point": _point_key(uri),
             "dis": str(dis),
+            "_dis_from_tag": dis_tag is not None,
             "unit": str(unit) if unit else None,
             "kind": str(kind) if kind else None,
             "brickClass": brick_classes[0] if brick_classes else None,
@@ -726,7 +728,7 @@ def describe_points(store, point_uris: list[str]) -> dict[str, dict]:
         }
     for uri in point_uris:
         out.setdefault(uri, {
-            "id": uri, "point": _point_key(uri), "dis": _local_name(uri), "unit": None, "kind": None,
+            "id": uri, "point": _point_key(uri), "dis": _local_name(uri), "_dis_from_tag": False, "unit": None, "kind": None,
             "brickClass": None, "tags": [], "equip": None, "equipDis": None,
         })
     return out
@@ -748,6 +750,15 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
 
     point_uris = expand_to_points(store, matched)
     meta = describe_points(store, point_uris)
+    # Computed points (derivation_engine) carry unit/label only on their
+    # history rows, never as graph tags - without this they'd chart as an
+    # unlabelled "mock-ahu-1" with no unit.
+    for uri, (unit, label) in timeseries.read_point_labels(ts_conn, point_uris).items():
+        info = meta[uri]
+        if not info["unit"] and unit:
+            info["unit"] = unit
+        if label and not info["_dis_from_tag"]:
+            info["dis"] = label
 
     rollup = None
     if query.rollup:
@@ -769,6 +780,7 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
     series = []
     for uri in point_uris:
         info = dict(meta[uri])
+        info.pop("_dis_from_tag")
         rows, truncated = history.get(uri, ([], False))
         if rollup:
             info["kind"] = "Number"

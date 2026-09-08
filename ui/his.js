@@ -248,14 +248,18 @@ function chartCard({ title, subtitle, series, unit, r, bool = false, compact = f
     li.classList.toggle("muted", state.hidden.has(s.id));
     const stats = numericStats(s.history);
     const link = `his.html?expr=${encodeURIComponent(`readAll(id==@${s.id}).hisRead(${r.span.label})`)}`;
+    // Click anywhere on the row to hide/show the line; the small ↗ at the
+    // end is the only thing that navigates (to this point on its own).
+    li.title = `${s.id}${s.brickClass ? `\n${s.brickClass}` : ""}\n${s.tags.join(" ")}\n(click to hide/show)`;
     li.innerHTML =
       `<span class="swatch" style="background:${s.color}"></span>` +
-      `<a href="${link}" title="${escapeHtml(s.id)}${s.brickClass ? `\n${s.brickClass}` : ""}\n${s.tags.join(" ")}">${escapeHtml(seriesLabel(s))}</a>` +
+      `<span class="name">${escapeHtml(seriesLabel(s))}</span>` +
       (stats
         ? ` <span class="last">${escapeHtml(fmtValue(stats.last, unit))}</span>` +
           (bool || typeof stats.last === "boolean" ? "" : ` <span class="stats">min ${fmtNum(stats.min)} · avg ${fmtNum(stats.avg)} · max ${fmtNum(stats.max)}</span>`)
         : ` <span class="stats">no data in span</span>`) +
-      (s.truncated ? ` <span class="field-error">truncated</span>` : "");
+      (s.truncated ? ` <span class="field-error">truncated</span>` : "") +
+      ` <a href="${link}" class="open-one" title="Open just this point">↗</a>`;
     li.addEventListener("click", (ev) => {
       if (ev.target.closest("a")) return;
       if (state.hidden.has(s.id)) state.hidden.delete(s.id);

@@ -77,8 +77,9 @@
 .legend .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .legend .stats { color: var(--muted); font-variant-numeric: tabular-nums; }
 .legend .last { font-weight: 600; font-variant-numeric: tabular-nums; }
-.legend a { color: inherit; text-decoration: none; }
-.legend a:hover { text-decoration: underline; }
+.legend li:hover .name { text-decoration: underline dotted; }
+.legend .open-one { color: var(--accent); text-decoration: none; opacity: 0.6; }
+.legend .open-one:hover { opacity: 1; }
 
 .tooltip {
   position: absolute;

@@ -180,6 +180,29 @@ def test_calendar_rollup_uses_date_trunc(live_server, gw, ahu):
 
 
 @pytest.mark.integration
+def test_computed_points_take_unit_and_label_from_their_history_rows(live_server, gw, ahu):
+    """derivation_engine writes unit/label onto point_history rows, never as
+    graph tags (see _write_and_attach) - a computed point attached to this
+    AHU must still come back with a real display name and unit."""
+    base_url, store = live_server
+    from timberdoodle import timeseries
+
+    computed = f"urn:point:computed/{ahu['run']}/ahu"
+    link_point_to_equip(store, URIRef(computed), URIRef(ahu["equip"]))
+    with timeseries.connect() as conn:
+        timeseries.write_point_value(conn, computed, 12.5, datetime.now(timezone.utc) - timedelta(minutes=1), unit="°F", label="AHU Coil Delta-T")
+
+    body = _his(gw, base_url, f"readAll(ahu and {ahu['run']}).hisRead(today)").json()
+    (series,) = [s for s in body["series"] if s["id"] == computed]
+    assert series["dis"] == "AHU Coil Delta-T" and series["unit"] == "°F"
+    assert series["point"] == f"computed/{ahu['run']}/ahu"
+    assert "_dis_from_tag" not in series
+    # A point that has its own dis tag keeps it - the history label is only a fallback.
+    (dat,) = [s for s in body["series"] if s["point"] == ahu["temp"]]
+    assert dat["dis"] == "DAT"
+
+
+@pytest.mark.integration
 def test_limit_truncates_per_point_and_flags_it(live_server, gw, ahu):
     base_url, _ = live_server
     body = _his(gw, base_url, f"readAll(ahu and {ahu['run']}).hisRead(today)", limit=2).json()

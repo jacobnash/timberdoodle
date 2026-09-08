@@ -170,6 +170,25 @@ def read_range_many(
     return out
 
 
+def read_point_labels(conn: psycopg.Connection, point_uris: list[str]) -> dict[str, tuple[str | None, str | None]]:
+    """Latest (unit, label) recorded alongside each point's samples. Only
+    derivation_engine writes these columns (ingest_reading leaves them
+    null) - so this is how a computed point, which has no haystack:dis/
+    haystack:unit tags in the graph, still gets a display name and unit
+    in hisquery's output."""
+    if not point_uris:
+        return {}
+    cur = conn.execute(
+        """
+        SELECT DISTINCT ON (point_uri) point_uri, unit, label FROM point_history
+        WHERE point_uri = ANY(%s) AND (unit IS NOT NULL OR label IS NOT NULL)
+        ORDER BY point_uri, ts DESC
+        """,
+        (point_uris,),
+    )
+    return {point_uri: (unit, label) for point_uri, unit, label in cur.fetchall()}
+
+
 # Calendar-length intervals date_bin can't express - handled by date_trunc
 # instead, which only knows these three month multiples.
 _CALENDAR_TRUNC = {1: "month", 3: "quarter", 12: "year"}
