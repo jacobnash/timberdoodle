@@ -288,10 +288,28 @@ day-two gap.
   once per leaf test (`OPTIONAL { SELECT DISTINCT ?s (true AS ?m) ... }` + `BOUND(?m)` flags):
   measured against the full ontology loaded into Oxigraph, an unbound `rdfs:subClassOf*` inside
   a filter takes 50+ s, per-candidate `EXISTS` with a VALUES list 0.4–5 s, this shape a flat
-  ~0.15 s for any list size. Ontology-level subjects (`owl:Class`, `brick:Tag`, `sh:NodeShape`)
-  are excluded from candidates by type so `readAll(Tag)` can't return Brick's vocabulary as
-  equipment. Empty results carry `hints` (`Air_Handeling_Unit` → `Air_Handling_Unit`) that the
-  UI renders as did-you-mean links. `tests/test_brick_vocab.py` pins the file facts relied on.
+  ~0.15 s for any list size. Empty results carry `hints` (`Air_Handeling_Unit` →
+  `Air_Handling_Unit`) that the UI renders as did-you-mean links. `tests/test_brick_vocab.py`
+  pins the file facts relied on.
+- **Brick extensions (2026-09-08, follow-up pass):** probing the above against the live stack
+  with Brick *and* a Brick extension in its own namespace loaded (the way Brick's extension
+  guidance says to write one) showed the extension was only half-reachable: its entities were
+  found under the Brick parent, but not by the extension class's own name, not through an
+  `owl:equivalentClass` alias it declared, and not by any `brick:hasAssociatedTag` word it
+  declared — 16 of 24 probes failed. Separately, the "excluded by type" candidate filter
+  (`FILTER NOT EXISTS { ?s a owl:Class/brick:Tag/sh:NodeShape }`) was where ~0.4 s of every
+  query went with Brick loaded, and it still let Brick's quantity individuals (`a
+  brick:Quantity`) and the embedded REC classes through, so `readAll(Quantity)` returned
+  vocabulary and any `not ...` filter returned ~470 ontology subjects. Now
+  `hisquery.graph_vocab` reads, in one query, every subClassOf/equivalentClass/hasAssociatedTag
+  edge and schema-typed subject whose subject isn't Brick's own; the compiler expands class
+  lists through it and resolves names and tag words against it; ontology subjects are dropped
+  in Python after the query by namespace and by declaration. Measured with the full ontology
+  loaded: 0.42 s → 0.07 s per query, 28/28 probes passing with and without Brick loaded.
+  `docs-site/pages/his-query.mdx` now has a "Your own Brick extension" section including how to
+  load one (a named graph of its own — `RemoteStore.load_ontology` replaces a single graph).
+  Known, documented limit: subjects in the `brick:` namespace are skipped when reading the live
+  graph, so a newer Brick loaded live doesn't extend the vendored 1.4.4 — bump the file.
 - **Test coverage:** `tests/test_hisquery.py` (parser, compiler against an in-memory rdflib
   graph including Brick-only/PROJ-typed/ontology-subject fixtures, span math including leap
   years/year rollover, interval parsing, documented 400s, hints — no services),
