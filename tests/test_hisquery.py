@@ -303,8 +303,8 @@ def test_hints_name_near_miss_brick_vocabulary_only_when_nothing_matched():
 def test_compiled_sparql_never_walks_the_hierarchy_in_the_query(graph):
     # Oxigraph takes 1-50s on rdfs:subClassOf paths inside a filter with the
     # full ontology loaded; every hop is resolved in Python beforehand.
-    sparql = h.compile_filter(h.parse_query("Temperature_Sensor and temperature").filter, h.custom_subclass_map(graph))
-    assert "subClassOf" not in sparql and "EXISTS" not in sparql.split("FILTER NOT EXISTS", 1)[1]
+    sparql = h.compile_filter(h.parse_query("Temperature_Sensor and temperature").filter, h.graph_vocab(graph))
+    assert "subClassOf" not in sparql and "EXISTS" not in sparql
     assert "Zone_Air_Temperature_Sensor" in sparql and "Fan_Status_Variant" not in sparql
 
 

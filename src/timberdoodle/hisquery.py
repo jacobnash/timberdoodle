@@ -20,9 +20,14 @@ without live services:
                         all work; and as a Brick *tag word* - the words a
                         class name is made of (brick:hasAssociatedTag), so
                         `temperature and sensor` finds Brick-typed points
-                        that never had a Haystack tag. The hierarchy comes
-                        from the vendored ontology via brick_vocab.py, not
-                        from the live graph (see that module for why).
+                        that never had a Haystack tag. Brick's own hierarchy
+                        comes from the vendored ontology via brick_vocab.py
+                        (see that module for why); whatever the live graph
+                        adds on top - a Brick extension in its own namespace,
+                        mapping.py's PROJ classes - comes from the graph
+                        itself (GraphVocab below), so an extension class is
+                        found under its Brick parent, by its own name, by
+                        its aliases, and by the tag words it declares.
   3. resolve_span()  - Axon DateSpan vocabulary (today, thisMonth,
                         2026-09, 2026-09-01..2026-09-07, ...) -> a
                         half-open [start, end) pair of aware datetimes in
@@ -45,7 +50,7 @@ silent wrong answer.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -377,19 +382,43 @@ PREFIX td: <urn:timberdoodle:td#>
 PREFIX owl: <http://www.w3.org/2002/07/owl#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX sh: <http://www.w3.org/ns/shacl#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 """
 
-# If Brick itself has been loaded into the store (RemoteStore.load_ontology
-# - queried through Oxigraph's --union-default-graph), its ~10k
-# class/tag/shape subjects would otherwise all be filter candidates, and
-# `readAll(Tag)` would hand back Brick's tag vocabulary as if it were
-# equipment. Schema-level things aren't entities; drop them by what they
-# are, not by named graph, so the same SPARQL runs on the in-memory rdflib
-# Store (which can't evaluate GRAPH) as on Oxigraph.
+# If an ontology has been loaded into the store (RemoteStore.load_ontology
+# - queried through Oxigraph's --union-default-graph), every one of its
+# subjects is a candidate for a filter, and `readAll(Tag)` or `readAll(not
+# point)` would hand back Brick's vocabulary as if it were equipment.
+# Schema-level things aren't entities. Two nets, both applied in Python
+# after the query (see match_entities) rather than as a per-candidate
+# FILTER NOT EXISTS in SPARQL - that clause alone was ~0.4s of every query
+# with Brick loaded (measured: 0.03s -> 0.4s on Oxigraph), and it still
+# missed Brick's quantity/substance individuals, which are typed as
+# brick:Quantity, not owl:Class:
+#
+#  1. Anything whose IRI is in a namespace that only ever holds vocabulary:
+#     Brick itself (classes, tags, shapes, quantities, substances), the
+#     REC ontology Brick 1.4 embeds, and the W3C vocabularies. A building
+#     entity is never minted there.
+#  2. Anything the live graph itself declares as a class or tag - typed as
+#     one (owl:Class, brick:Tag, sh:NodeShape, ...) or placed in a
+#     hierarchy (subject/object of rdfs:subClassOf / owl:equivalentClass /
+#     brick:hasAssociatedTag). That's what catches an extension ontology in
+#     its own namespace, which net 1 can't know about.
+_VOCABULARY_NAMESPACES = (
+    "https://brickschema.org/",
+    "https://w3id.org/rec#", "https://w3id.org/rec/", "https://w3id.org/ref#",
+    "http://www.w3.org/",
+    "http://qudt.org/",
+)
 _SCHEMA_TYPES = (
     "owl:Class", "owl:ObjectProperty", "owl:DatatypeProperty", "owl:AnnotationProperty", "owl:Ontology",
-    "rdfs:Datatype", "rdfs:Class", "sh:NodeShape", "sh:PropertyShape", "brick:Tag",
+    "rdfs:Datatype", "rdfs:Class", "sh:NodeShape", "sh:PropertyShape", "brick:Tag", "brick:Quantity", "brick:Substance",
 )
+
+
+def _in_vocabulary_namespace(iri: str) -> bool:
+    return iri.startswith(_VOCABULARY_NAMESPACES)
 
 
 def _looks_like_class(name: str) -> bool:
@@ -462,27 +491,101 @@ _SPARQL_OPS = {"==": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">="
 
 BRICK_NS = "https://brickschema.org/schema/Brick#"
 PROJ_NS = "urn:timberdoodle:proj#"
+TD_NS = "urn:timberdoodle:td#"
 
 
-def custom_subclass_map(store) -> dict[str, set[str]]:
-    """Every rdfs:subClassOf the live graph asserts about a class that
-    isn't Brick's own - in practice the PROJ classes mapping.py mints as
-    direct subclasses of a Brick class (urn:timberdoodle:proj#X). Keyed by
-    parent IRI -> child IRIs. One cheap query; folding this into the class
-    list handed to SPARQL is what lets the compiled filter stay a bare
-    `?s a ?c` (Oxigraph spends ~1s per query on `?t rdfs:subClassOf ?c`
-    inside EXISTS with the full ontology loaded, whatever the list size)."""
+def _local_name(uri: str) -> str:
+    i = max(uri.rfind("#"), uri.rfind("/"), uri.rfind(":"))
+    return uri[i + 1 :]
+
+
+@dataclass
+class GraphVocab:
+    """What the live graph declares on top of the vendored Brick: a Brick
+    extension ontology in its own namespace (the way Brick's extension
+    guidance says to write one - `acme:Heat_Recovery_AHU rdfs:subClassOf
+    brick:Air_Handling_Unit`, aliases via owl:equivalentClass, tag words via
+    brick:hasAssociatedTag), and the PROJ fallback classes mapping.py
+    mints. Brick's own triples are skipped when it's loaded: brick_vocab
+    already has them, faster, and from the pinned version.
+
+    Built by graph_vocab() from one query per request; folding these hops
+    into the class list handed to SPARQL is what lets the compiled filter
+    stay a bare `?s a ?c` (any rdfs:subClassOf walk inside the query costs
+    1-50s on Oxigraph with the full ontology loaded)."""
+
+    children: dict[str, set[str]] = field(default_factory=dict)  # parent IRI -> direct subclass IRIs
+    equivalents: dict[str, set[str]] = field(default_factory=dict)  # IRI -> equivalent IRIs, both directions
+    tagged: dict[str, set[str]] = field(default_factory=dict)  # tag word, lower-cased -> class IRIs carrying it
+    by_name: dict[str, set[str]] = field(default_factory=dict)  # class local name, lower-cased -> IRIs
+    schema_iris: set[str] = field(default_factory=set)  # every IRI declared here as a class, tag, shape, ...
+
+    def add_class(self, iri: str) -> None:
+        self.schema_iris.add(iri)
+        if not iri.startswith(BRICK_NS):
+            self.by_name.setdefault(_local_name(iri).lower(), set()).add(iri)
+
+    def expand(self, class_iris: set[str]) -> set[str]:
+        """These classes plus everything the graph declares equivalent to or
+        beneath them, transitively - every IRI an entity could be typed as
+        and still count as one of them."""
+        out, stack = set(), list(class_iris)
+        while stack:
+            iri = stack.pop()
+            if iri in out:
+                continue
+            out.add(iri)
+            stack.extend(self.equivalents.get(iri, ()))
+            stack.extend(self.children.get(iri, ()))
+        return out
+
+    def classes_named(self, name: str) -> set[str]:
+        return set(self.by_name.get(name.lower(), ()))
+
+    def classes_tagged(self, word: str) -> set[str]:
+        words = {word.lower(), brick_vocab.HAYSTACK_TO_BRICK_TAG.get(word.lower(), "").lower()}
+        out: set[str] = set()
+        for w in words:
+            out |= self.tagged.get(w, set())
+        return out
+
+    def is_schema(self, iri: str) -> bool:
+        return iri in self.schema_iris or _in_vocabulary_namespace(iri)
+
+
+def graph_vocab(store) -> GraphVocab:
+    """One query: every hierarchy/alias/tag edge whose subject isn't Brick's
+    own, plus every subject typed as a schema-level thing. ~10 ms on
+    Oxigraph with the full ontology loaded (Brick's own rows are filtered
+    server-side); a handful of rows on a bare entity graph."""
     rows = store.query(
         PREFIXES
-        + f"""SELECT ?sub ?sup WHERE {{
-            ?sub rdfs:subClassOf ?sup .
-            FILTER(isIRI(?sub) && isIRI(?sup) && !STRSTARTS(STR(?sub), "{BRICK_NS}"))
+        + f"""SELECT ?sub ?p ?obj WHERE {{
+            {{ VALUES ?p {{ rdfs:subClassOf owl:equivalentClass brick:hasAssociatedTag }} ?sub ?p ?obj . }}
+            UNION
+            {{ VALUES ?obj {{ {" ".join(_SCHEMA_TYPES)} }} ?sub rdf:type ?obj . BIND(rdf:type AS ?p) }}
+            FILTER(isIRI(?sub) && isIRI(?obj) && !STRSTARTS(STR(?sub), "{BRICK_NS}"))
         }}"""
     )
-    out: dict[str, set[str]] = {}
+    g = GraphVocab()
     for row in rows:
-        out.setdefault(str(row.sup), set()).add(str(row.sub))
-    return out
+        sub, p, obj = str(row.sub), _local_name(str(row.p)), str(row.obj)
+        if p == "subClassOf":
+            g.children.setdefault(obj, set()).add(sub)
+            g.add_class(sub)
+            g.add_class(obj)
+        elif p == "equivalentClass":
+            g.equivalents.setdefault(sub, set()).add(obj)
+            g.equivalents.setdefault(obj, set()).add(sub)
+            g.add_class(sub)
+            g.add_class(obj)
+        elif p == "hasAssociatedTag":
+            g.tagged.setdefault(_local_name(obj).lower(), set()).add(sub)
+            g.add_class(sub)
+            g.schema_iris.add(obj)
+        else:
+            g.schema_iris.add(sub)
+    return g
 
 
 class _Compiler:
@@ -496,20 +599,10 @@ class _Compiler:
     `!BOUND`, and a comparison on a missing tag is unbound, i.e. false -
     Haystack's semantics for free."""
 
-    def __init__(self, custom_subclasses: dict[str, set[str]] | None = None):
+    def __init__(self, graph: GraphVocab | None = None):
         self.n = 0
-        self.custom_subclasses = custom_subclasses or {}
+        self.graph = graph or GraphVocab()
         self.flags: list[tuple[str, str]] = []  # (flag var, pattern that binds ?s)
-
-    def _with_custom_descendants(self, class_iris: set[str]) -> set[str]:
-        out, stack = set(), list(class_iris)
-        while stack:
-            iri = stack.pop()
-            if iri in out:
-                continue
-            out.add(iri)
-            stack.extend(self.custom_subclasses.get(iri, ()))
-        return out
 
     def _var(self) -> str:
         self.n += 1
@@ -540,15 +633,14 @@ class _Compiler:
 
     def _typed_as_any(self, class_iris: set[str]) -> str:
         """`?s` is typed as one of these classes or anything the live graph
-        declares beneath them (PROJ classes). Every hop of hierarchy is
-        resolved before SPARQL sees it - Brick's own from brick_vocab, the
-        graph's from custom_subclass_map - so this is a bound VALUES list
-        and a single `?s a ?c`. Any formulation that walks rdfs:subClassOf
-        inside the query measured 1s-50s on Oxigraph with the full
-        ontology loaded."""
+        declares equivalent to or beneath them (extension classes, PROJ
+        classes). Every hop of hierarchy is resolved before SPARQL sees it
+        - Brick's own from brick_vocab, the graph's from GraphVocab - so
+        this is a bound VALUES list and a single `?s a ?c`. Any formulation
+        that walks rdfs:subClassOf inside the query measured 1s-50s on
+        Oxigraph with the full ontology loaded."""
         c = self._var()
-        iris = self._with_custom_descendants(class_iris)
-        members = " ".join(f"<{iri}>" for iri in sorted(iris))
+        members = " ".join(f"<{iri}>" for iri in sorted(self.graph.expand(class_iris)))
         return self._flag(f"VALUES ?{c} {{ {members} }} ?s a ?{c}")
 
     def _has(self, name: str) -> str:
@@ -557,23 +649,32 @@ class _Compiler:
         if _looks_like_class(name):
             canonical = vocab.canonical_class(name)
             # Air_Handling_Unit also finds Rooftop_Unit, DOAS, ... and
-            # entities typed with Brick's own alias brick:AHU. A name Brick
-            # doesn't know (a PROJ class, a newer Brick, an ontology-less
-            # deployment) is matched as an exact brick:/proj: type.
+            # entities typed with Brick's own alias brick:AHU. A class the
+            # live graph declares under this name (an extension's
+            # acme:Heat_Recovery_AHU, a PROJ class) matches the same way,
+            # case-insensitively, with its own subtree. A name nobody knows
+            # (a newer Brick, an ontology-less deployment) is matched as an
+            # exact brick:/proj: type.
             brick_names = vocab.descendants(canonical) if canonical else {name}
-            parts.append(self._typed_as_any({BRICK_NS + n for n in brick_names} | {PROJ_NS + name}))
+            iris = {BRICK_NS + n for n in brick_names} | {PROJ_NS + name} | self.graph.classes_named(name)
+            parts.append(self._typed_as_any(iris))
         else:
             # A plain word: Brick's own tag vocabulary (`temperature`,
             # `setpoint`, `ahu`) with Haystack spellings mapped (`temp`,
-            # `sp`, `cmd`), plus this project's mapping rules run backwards.
+            # `sp`, `cmd`), the tag words an extension declares on its own
+            # classes, an extension class spelled as one word (`hru` for
+            # acme:HRU - Brick's `ahu` works only because Brick declares a
+            # tag:AHU, an extension alias has none), plus this project's
+            # mapping rules run backwards.
             classes: set[str] = set()
             tag = vocab.canonical_tag(name)
             if tag:
                 classes |= vocab.classes_with_tag(tag)
             for cls in _rule_classes_by_tag().get(name, ()):
                 classes |= vocab.descendants(cls) or {cls}
-            if classes:
-                parts.append(self._typed_as_any({BRICK_NS + n for n in classes}))
+            iris = {BRICK_NS + n for n in classes} | self.graph.classes_tagged(name) | self.graph.classes_named(name)
+            if iris:
+                parts.append(self._typed_as_any(iris))
         for alias in _STRUCTURAL_ALIASES.get(name, []):
             parts.append(self._flag(alias.replace("{v}", self._var())))
         return self._any(parts)
@@ -610,16 +711,20 @@ def _uri(text: str) -> str:
     return text
 
 
-def compile_filter(node, custom_subclasses: dict[str, set[str]] | None = None) -> str:
-    """One SELECT over every entity subject in the graph. Each leaf test
-    of the filter is a subject-set (see _Compiler), left-joined once;
-    the whole boolean expression is one FILTER over those flags, so
-    and/or/not compose as plain SPARQL &&/||/! with no MINUS juggling.
+def compile_filter(node, graph: GraphVocab | None = None) -> str:
+    """One SELECT over every subject in the graph. Each leaf test of the
+    filter is a subject-set (see _Compiler), left-joined once; the whole
+    boolean expression is one FILTER over those flags, so and/or/not
+    compose as plain SPARQL &&/||/! with no MINUS juggling.
 
-    `custom_subclasses` is custom_subclass_map(store) - pass it when
-    compiling against a live store so PROJ classes count as their Brick
-    parent; parse_query compiles without it purely to surface errors."""
-    compiler = _Compiler(custom_subclasses)
+    `graph` is graph_vocab(store) - pass it when compiling against a live
+    store so extension and PROJ classes count as their Brick parents and
+    resolve by name; parse_query compiles without it purely to surface
+    errors. Ontology-level subjects are *not* filtered here - see
+    match_entities, which drops them after the fact (each ?s is judged
+    independently, so the result is identical and the query stays a plain
+    scan instead of a per-candidate NOT EXISTS)."""
+    compiler = _Compiler(graph)
     body = compiler.expr(node)
     flags = "\n".join(
         f"  OPTIONAL {{ {{ SELECT DISTINCT ?s (true AS ?{m}) WHERE {{ {pattern} }} }} }}"
@@ -628,8 +733,7 @@ def compile_filter(node, custom_subclasses: dict[str, set[str]] | None = None) -
     return (
         PREFIXES
         + "SELECT DISTINCT ?s WHERE {\n"
-        + "  { SELECT DISTINCT ?s WHERE { ?s ?p ?o . FILTER(isIRI(?s))\n"
-        + f"      FILTER NOT EXISTS {{ ?s a ?schema . FILTER(?schema IN ({', '.join(_SCHEMA_TYPES)})) }} }} }}\n"
+        + "  { SELECT DISTINCT ?s WHERE { ?s ?p ?o . FILTER(isIRI(?s)) } }\n"
         + (flags + "\n" if flags else "")
         + f"  FILTER({body})\n"
         + "}"
@@ -646,13 +750,16 @@ def _has_names(node) -> list[str]:
     return []
 
 
-def hints_for_empty_result(node) -> list[dict]:
+def hints_for_empty_result(node, graph: GraphVocab | None = None) -> list[dict]:
     """Why might this filter have matched nothing? Only Brick-vocabulary
     answers - a class name Brick doesn't have but nearly does
     (Air_Handeling_Unit), a word that's almost a Brick tag (temperture).
     Never raised as an error: the name may be a perfectly good Haystack
-    marker or PROJ class this file can't know about."""
+    marker this file can't know about. A class or tag word the live graph
+    declares (an extension's, a PROJ class) is a real name that simply
+    matched nothing - it's never "corrected" to a Brick near-miss."""
     vocab = brick_vocab.load()
+    graph = graph or GraphVocab()
     hints = []
     seen = set()
     for name in _has_names(node):
@@ -660,11 +767,11 @@ def hints_for_empty_result(node) -> list[dict]:
             continue
         seen.add(name)
         if _looks_like_class(name):
-            if vocab.canonical_class(name):
+            if vocab.canonical_class(name) or graph.classes_named(name):
                 continue
             suggestions = vocab.suggest_class(name)
         else:
-            if vocab.canonical_tag(name) or name in _rule_classes_by_tag():
+            if vocab.canonical_tag(name) or name in _rule_classes_by_tag() or graph.classes_tagged(name) or graph.classes_named(name):
                 continue
             suggestions = vocab.suggest_tag(name)
         if suggestions:
@@ -802,11 +909,6 @@ def resolve_span(text: str | None, now: datetime, tz: str = "UTC") -> Span:
 _MATCHED_PREVIEW = 200
 
 
-def _local_name(uri: str) -> str:
-    i = max(uri.rfind("#"), uri.rfind("/"), uri.rfind(":"))
-    return uri[i + 1 :]
-
-
 def _split_concat(value) -> list[str]:
     return [part for part in str(value).split(" ") if part] if value else []
 
@@ -828,9 +930,16 @@ def _infer_kind(rows) -> str | None:
     return None
 
 
-def match_entities(store, node) -> list[str]:
-    rows = store.query(compile_filter(node, custom_subclass_map(store)))
-    return sorted(str(row.s) for row in rows)
+def match_entities(store, node, graph: GraphVocab | None = None) -> list[str]:
+    """Every entity the filter selects. Ontology-level subjects - Brick's
+    own vocabulary when it's loaded, an extension's class/tag declarations
+    - are dropped here (see _VOCABULARY_NAMESPACES / GraphVocab.is_schema):
+    the compiled query judges each subject independently, so filtering
+    after the fact is the same result as excluding them as candidates,
+    minus a per-candidate NOT EXISTS that cost ~0.4s per query."""
+    graph = graph if graph is not None else graph_vocab(store)
+    rows = store.query(compile_filter(node, graph))
+    return sorted(uri for uri in (str(row.s) for row in rows) if not graph.is_schema(uri))
 
 
 def expand_to_points(store, entity_uris: list[str]) -> list[str]:
@@ -885,10 +994,13 @@ def describe_points(store, point_uris: list[str]) -> dict[str, dict]:
     for row in rows:
         uri = str(row.point)
         types = _split_concat(getattr(row, "types", None))
-        # A real Brick class over a PROJ fallback when a point somehow has both.
+        # Any ontology class the point is typed with - Brick's, an
+        # extension's, a PROJ fallback - but not Timberdoodle's own
+        # bookkeeping types (td:RawPoint). A real Brick class first, then an
+        # extension's, then PROJ, when a point somehow has more than one.
         classes = sorted(
-            (t for t in types if t.startswith(("https://brickschema.org/", "urn:timberdoodle:proj#"))),
-            key=lambda t: (not t.startswith("https://brickschema.org/"), t),
+            (t for t in types if not t.startswith(TD_NS)),
+            key=lambda t: (not t.startswith(BRICK_NS), t.startswith(PROJ_NS), t),
         )
         brick_classes = [_local_name(t) for t in classes]
         topic = getattr(row, "topic_", None)
@@ -927,7 +1039,8 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
     from timberdoodle import timeseries
 
     span = resolve_span(query.span_text, now, tz)
-    matched = match_entities(store, query.filter)
+    graph = graph_vocab(store)
+    matched = match_entities(store, query.filter, graph)
     if query.mode == "read":
         if not matched:
             raise NoMatchError(f"read({query.filter_text}): no rec matches")
@@ -985,7 +1098,7 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
         "limit": limit,
         "matched": matched[:_MATCHED_PREVIEW],
         "matchedCount": len(matched),
-        "hints": hints_for_empty_result(query.filter) if not matched else [],
+        "hints": hints_for_empty_result(query.filter, graph) if not matched else [],
         "series": series,
     }
 
