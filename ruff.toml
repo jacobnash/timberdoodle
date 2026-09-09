@@ -7,3 +7,10 @@ target-version = "py310"
 # Stage 3.3 for the broader --select ALL adoption decision.
 [lint]
 extend-select = ["BLE001", "RUF013"]
+
+[lint.per-file-ignores]
+# axon_convert.py's whole job is to emit Python source; the only way to
+# test that the emitted source *behaves* like the Axon it came from is to
+# exec() it. Test-only, hand-authored inputs - not user-supplied code
+# (that path is sandbox.py, which carries its own scoped noqa).
+"tests/test_axon_convert.py" = ["S102"]

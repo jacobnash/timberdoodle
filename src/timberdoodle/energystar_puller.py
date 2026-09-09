@@ -14,7 +14,7 @@ Poll-only, single account per process - same shape as the other pullers.
 import argparse
 import os
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 from timberdoodle import ingest, tracing
 from timberdoodle.energystar_client import EnergyStarClient
@@ -32,7 +32,9 @@ def _latest_complete_period(today: date) -> tuple[int, int]:
 
 def pull_once(client: EnergyStarClient, store, ts_conn, account_id, metrics: list[str]) -> int:
     now = time.time()
-    year, month = _latest_complete_period(date.today())
+    # UTC, same clock as `now` above - the period is derived from the moment
+    # of the pull, not from wherever the host's local zone happens to be.
+    year, month = _latest_complete_period(datetime.now(timezone.utc).date())
 
     with tracer.start_as_current_span("energystar_puller.pull_once") as span:
         span.set_attribute("account_id", str(account_id))

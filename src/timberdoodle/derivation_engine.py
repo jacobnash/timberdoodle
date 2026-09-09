@@ -35,7 +35,14 @@ from typing import cast
 
 from rdflib import URIRef
 
-from timberdoodle import derivation_health, json_store, mqtt_util, sandbox, timeseries, tracing
+from timberdoodle import (
+    derivation_health,
+    json_store,
+    mqtt_util,
+    sandbox,
+    timeseries,
+    tracing,
+)
 from timberdoodle.faults import list_faults
 from timberdoodle.ingest import link_point_to_equip, topic_to_point_uri
 from timberdoodle.remote_store import RemoteStore

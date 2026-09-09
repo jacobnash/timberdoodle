@@ -290,7 +290,7 @@ class Parser:
             return UnaryOp("not", self._parse_not())
         return self._parse_comparison()
 
-    _COMPARE_OPS = {"==", "!=", "<", ">", "<=", ">="}
+    _COMPARE_OPS = frozenset({"==", "!=", "<", ">", "<=", ">="})
 
     def _parse_comparison(self):
         node = self._parse_add()

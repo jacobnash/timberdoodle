@@ -4,7 +4,6 @@ OpenAPI, (2) real live requests against the real running fault_api.py
 produce responses matching what the spec documents.
 """
 
-import time
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
@@ -133,7 +132,7 @@ def test_full_rule_webhook_fault_flow_matches_documented_schemas(gw, live_server
     # ack/snooze need a real fault row - open one directly against the same
     # DB this live server's ts_pool points at (fault_detector.py's job, not
     # this API's, to open faults - so bypass it here).
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
 
     from timberdoodle.faults import open_fault
     from timberdoodle.timeseries import connect
