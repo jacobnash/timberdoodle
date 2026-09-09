@@ -75,8 +75,10 @@ that misses every subclass is useless), there are aliases (`AHU` is `Air_Handlin
   every alias: `Temperature_Sensor` (or `temperature_sensor`) finds the discharge, return, mixed,
   outside and zone air temperature sensors; `Air_Handling_Unit`, `AHU`, and `air_handling_unit`
   all find air handlers, rooftop units, DOAS units, and anything typed with Brick's alias
-  classes. The PROJ fallback classes `mapping.py` mints (`proj:Fan_Status_Variant`, a direct
-  `rdfs:subClassOf` of a Brick class) count as their parent.
+  classes. Classes the live graph adds beneath Brick count as their parents and resolve by
+  their own name the same way — a [Brick extension](#your-own-brick-extension) of yours, or the
+  PROJ fallback classes `mapping.py` mints (`proj:Fan_Status_Variant`, a direct
+  `rdfs:subClassOf` of a Brick class).
 - **As a Haystack marker.** `ahu`, `air`, `temp`, `sensor`, `zone`... anything ingest wrote as a
   `haystack:hasTag` triple (every marker a source sent, verbatim). This is what a Haystack-fed
   point has; the two ways above are what a Brick-only entity (a loaded model, a derivation
@@ -85,19 +87,86 @@ that misses every subclass is useless), there are aliases (`AHU` is `Air_Handlin
   `brick:hasPoint`, is a `brick:isPointOf` something, and so on), so a BACnet point that arrived
   with no `point` marker and no class still counts.
 
-Hierarchy, aliases and tag words come from the vendored `ontology/Brick-only.ttl` (1.4.4), read
-once per process by `brick_vocab.py` — **not** from the live graph. That's deliberate: nothing
-in `docker-compose.yml` loads Brick into Oxigraph (see [Architecture](/architecture)), and even
-when it is loaded, Oxigraph takes tens of seconds on an `rdfs:subClassOf*` walk inside a
-filter over the full ontology. Every hop is resolved in Python and handed to SPARQL as a bound
-class list instead, so a filter is ~0.15s whether it names 5 classes or 1,400. The only
-hierarchy read from the live graph is the graph's own: the `rdfs:subClassOf` triples under
-PROJ classes (one cheap query).
+*Brick's own* hierarchy, aliases and tag words come from the vendored `ontology/Brick-only.ttl`
+(1.4.4), read once per process by `brick_vocab.py` — not from the live graph. That's
+deliberate: nothing in `docker-compose.yml` loads Brick into Oxigraph (see
+[Architecture](/architecture)), and even when it is loaded, Oxigraph takes tens of seconds on
+an `rdfs:subClassOf*` walk inside a filter over the full ontology. Every hop is resolved in
+Python and handed to SPARQL as a bound class list instead, so a filter is ~0.07s with the full
+ontology loaded, whether it names 5 classes or 1,400. What the live graph declares *on top of*
+Brick is read from the live graph, in one cheap query per request (`hisquery.graph_vocab`):
+every `rdfs:subClassOf`, `owl:equivalentClass` and `brick:hasAssociatedTag` whose subject
+isn't in Brick's namespace, plus every subject typed as a class, tag or shape. So an extension
+class is found under its Brick parent, by its own name, through its own aliases, and by the tag
+words it declares — see below.
+
+Ontology-level subjects are never entities. With Brick loaded into Oxigraph its ~2,600
+class/tag/shape/quantity subjects (and the REC ontology Brick 1.4 embeds) are all in the same
+union graph as your equipment, and a `readAll(not point)` would otherwise list them. They're
+dropped after the query by what they are — anything in a vocabulary namespace
+(`brickschema.org`, `w3id.org/rec`, `w3.org`, `qudt.org`), and anything the live graph itself
+declares as a class, tag, or shape (so an extension's declarations are excluded too, whatever
+namespace they use). This happens in Python, not as a `FILTER NOT EXISTS` per candidate: that
+clause alone was ~0.4s of every query, and it only knew about `owl:Class`-typed subjects, so
+`readAll(Quantity)` used to hand back Brick's quantity individuals.
 
 When a filter matches nothing and a name is *almost* a Brick class or tag word, the response
 carries `hints` — `Air_Handeling_Unit` → `Air_Handling_Unit`, `temperture` → `temperature` —
 and the UI shows them as "did you mean" links. It's never an error: the name may be a perfectly
-good Haystack marker or PROJ class the vendored Brick can't know about.
+good Haystack marker the vendored Brick can't know about. A class or tag word your extension
+declares is never "corrected" to a Brick near-miss.
+
+### Your own Brick extension
+
+The reason to pick Brick is that you can extend it, and the filter treats an extension exactly
+like Brick. Write it the way [Brick's extension guidance](https://docs.brickschema.org/extra/extending.html)
+says — your own namespace, `rdfs:subClassOf` the nearest Brick class, a `skos:definition`,
+optionally `owl:equivalentClass` aliases and `brick:hasAssociatedTag` words:
+
+```turtle
+@prefix acme:  <https://acme.example/brick-ext#> .
+@prefix brick: <https://brickschema.org/schema/Brick#> .
+@prefix tag:   <https://brickschema.org/schema/BrickTag#> .
+
+acme:Heat_Recovery_AHU a owl:Class ;
+    rdfs:subClassOf brick:Air_Handling_Unit ;
+    skos:definition "An air handler with an integral heat recovery wheel." ;
+    brick:hasAssociatedTag tag:Heat, tag:Recovery .
+
+acme:HRU a owl:Class ; owl:equivalentClass acme:Heat_Recovery_AHU .
+
+acme:Rotor a brick:Tag .
+acme:Wheel_Speed_Sensor a owl:Class ;
+    rdfs:subClassOf brick:Speed_Sensor ;
+    brick:hasAssociatedTag acme:Rotor, tag:Speed, tag:Sensor .
+```
+
+Then an equipment typed `acme:Heat_Recovery_AHU` (or `acme:HRU`, or a further subclass of
+either) is found by `AHU`, `Air_Handling_Unit`, `Equipment`, `ahu`, `equip`, and also by
+`Heat_Recovery_AHU`, `heat_recovery_ahu`, `HRU`, `hru`, and `heat and recovery`. Its
+`acme:Wheel_Speed_Sensor` point is found by `Speed_Sensor`, `speed and sensor`, `Sensor`,
+`Point`, `Wheel_Speed_Sensor`, and `rotor`; the response reports `Wheel_Speed_Sensor` as its
+`brickClass`. A class declared by `rdfs:subClassOf` alone, with no `a owl:Class`, works the
+same way. Two things to know:
+
+- **Load it into a graph of its own.** `RemoteStore.load_ontology` `PUT`s into a single named
+  graph (`urn:timberdoodle:ontology`) and replaces it, so it can't hold Brick and your
+  extension at once. Oxigraph's graph-store endpoint takes any graph name:
+
+  ```sh
+  curl -X PUT -H 'Content-Type: text/turtle' --data-binary @acme-ext.ttl \
+       'http://localhost:7878/store?graph=urn:acme:ontology'
+  ```
+
+  The query reads through `--union-default-graph`, so the graph name is yours to pick. Brick
+  itself does not need to be loaded for any of this to work — the filter needs your
+  `rdfs:subClassOf brick:...` edges, and Brick's side of the hierarchy comes from the vendored
+  file. Loading Brick as well (`python ontology_demo.py`) is fine; it costs ~0.05s per query.
+- **Stay out of Brick's namespace.** Triples whose subject is a `brick:` IRI are skipped when
+  the live graph is read (Brick's own are already known, faster, from the pinned file), so a
+  class you mint *as* `brick:Something` isn't picked up as an extension. That also means a
+  *newer* Brick loaded live doesn't extend the vendored one: a class added in Brick 1.5 matches
+  only by exact `rdf:type` until `ontology/Brick-only.ttl` is bumped (see `ontology/README.md`).
 
 Comparisons: `dis == "AHU-1"`, `unit == "°F"`, `kind != "Bool"` compare `haystack:*` value tags
 as-is; `id == @some-id` matches the entity's own id (and it's the only thing `id` may be compared

@@ -170,7 +170,9 @@ The expression is Axon-shaped: a tag filter (`and`/`or`/`not`,
 rather than the way Brick spells it - `zone and air and temperature`
 matches by the words a class name is made of, `temperature_sensor` /
 `AHU` / `Air_Handling_Unit` match a class in any case with all its
-subclasses and aliases, and Haystack markers (`ahu`, `temp`) still work
+subclasses and aliases (including classes your own Brick extension adds
+beneath them, which also resolve by their own names, aliases and tag
+words), and Haystack markers (`ahu`, `temp`) still work
 on tagged data - then `.hisRead(span)`
 with Axon's span words (`today`, `yesterday`, `thisWeek`, `lastMonth`,
 `2026-09`, `2026-09-01..2026-09-07`, ...) and an optional

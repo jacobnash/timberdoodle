@@ -186,6 +186,16 @@ def test_parse_interval(text, seconds, months):
     assert (iv.seconds, iv.months) == (seconds, months)
 
 
+@pytest.mark.parametrize("text", ["2mo", "6mo", "2yr", "13mo"])
+def test_unsupported_calendar_interval_is_a_parse_error(text):
+    # A query error, not a read_rollup error: read_rollup never runs when the
+    # filter matched nothing, so validating only there would return 200.
+    with pytest.raises(h.HisQueryError, match="calendar rollups support"):
+        h.parse_interval(text)
+    with pytest.raises(h.HisQueryError, match="calendar rollups support"):
+        h.parse_query(f"readAll(nothing).hisRead(today).hisRollup(avg, {text})")
+
+
 # --- compiler, run against a real (in-memory) graph -------------------------
 
 AHU = URIRef("urn:equip:fbf/ahu-1")
@@ -200,6 +210,16 @@ B_ZT = URIRef("urn:point:brick/rtu-7/zt")
 B_FAN = URIRef("urn:point:brick/rtu-7/fan")
 PROJ = Namespace("urn:timberdoodle:proj#")
 TAG = Namespace("https://brickschema.org/schema/BrickTag#")
+# A Brick extension in its own namespace, written the way Brick's extension
+# guidance says to (docs.brickschema.org/extra/extending.html) - the reason
+# to pick Brick in the first place is that this is allowed.
+ACME = Namespace("https://acme.example/brick-ext#")
+REC = Namespace("https://w3id.org/rec#")
+HRAHU = URIRef("urn:equip:acme/hrahu-1")  # acme:Heat_Recovery_AHU, one rdfs:subClassOf below brick:Air_Handling_Unit
+LAB_HRAHU = URIRef("urn:equip:acme/hrahu-2")  # acme:Lab_Heat_Recovery_AHU, two levels below
+HRU = URIRef("urn:equip:acme/hrahu-3")  # acme:HRU, an owl:equivalentClass alias the extension declares
+WHEEL = URIRef("urn:point:acme/hrahu-1/wheel")  # acme:Wheel_Speed_Sensor, with its own tag word
+BYPASS = URIRef("urn:point:acme/hrahu-1/bypass")  # a class declared only by rdfs:subClassOf, no owl:Class
 
 
 @pytest.fixture
@@ -233,8 +253,32 @@ def graph():
         (BRICK.Zone_Air_Temperature_Sensor, RDF.type, OWL.Class),
         (BRICK.Zone_Air_Temperature_Sensor, RDFS.subClassOf, BRICK.Air_Temperature_Sensor),
         (TAG.Temperature, RDF.type, BRICK.Tag),
+        # ... including the ontology *individuals* Brick carries, which are typed
+        # as brick:Quantity, not owl:Class, and the REC classes Brick 1.4 embeds.
+        (BRICK.Active_Energy, RDF.type, BRICK.Quantity),
+        (REC.Building, RDF.type, OWL.Class), (REC.Building, RDFS.subClassOf, REC.Architecture),
+        # --- a Brick extension ontology (see ACME above) plus entities typed with it ---
+        (ACME.Heat_Recovery_AHU, RDF.type, OWL.Class), (ACME.Heat_Recovery_AHU, RDFS.subClassOf, BRICK.Air_Handling_Unit),
+        (ACME.Heat_Recovery_AHU, BRICK.hasAssociatedTag, TAG.Heat), (ACME.Heat_Recovery_AHU, BRICK.hasAssociatedTag, TAG.Recovery),
+        (ACME.Lab_Heat_Recovery_AHU, RDF.type, OWL.Class), (ACME.Lab_Heat_Recovery_AHU, RDFS.subClassOf, ACME.Heat_Recovery_AHU),
+        (ACME.HRU, RDF.type, OWL.Class), (ACME.HRU, OWL.equivalentClass, ACME.Heat_Recovery_AHU),
+        (ACME.Rotor, RDF.type, BRICK.Tag),
+        (ACME.Wheel_Speed_Sensor, RDF.type, OWL.Class), (ACME.Wheel_Speed_Sensor, RDFS.subClassOf, BRICK.Speed_Sensor),
+        (ACME.Wheel_Speed_Sensor, BRICK.hasAssociatedTag, ACME.Rotor), (ACME.Wheel_Speed_Sensor, BRICK.hasAssociatedTag, TAG.Speed),
+        (ACME.Bypass_Damper_Position_Sensor, RDFS.subClassOf, BRICK.Damper_Position_Sensor),
+        (HRAHU, RDF.type, ACME.Heat_Recovery_AHU), (HRAHU, HAYSTACK.dis, Literal("HR-AHU 1")),
+        (HRAHU, BRICK.hasPoint, WHEEL), (HRAHU, BRICK.hasPoint, BYPASS),
+        (WHEEL, RDF.type, ACME.Wheel_Speed_Sensor), (WHEEL, BRICK.isPointOf, HRAHU),
+        (BYPASS, RDF.type, ACME.Bypass_Damper_Position_Sensor), (BYPASS, BRICK.isPointOf, HRAHU),
+        (LAB_HRAHU, RDF.type, ACME.Lab_Heat_Recovery_AHU),
+        (HRU, RDF.type, ACME.HRU),
     ])
     return s
+
+
+ALL_EQUIP = [AHU, VAV, HX_VAV, B_RTU, HRAHU, LAB_HRAHU, HRU]
+ALL_AHUS = [AHU, B_RTU, HRAHU, LAB_HRAHU, HRU]
+ALL_POINTS = [DAT, FAN, ZT, HX_ZT, B_ZT, B_FAN, WHEEL, BYPASS]
 
 
 def _match(graph, text):
@@ -256,30 +300,49 @@ def _match(graph, text):
         ("equipRef == @urn:equip:fbf/ahu-1", [DAT, FAN]),  # full URI -> brick:isPointOf
         ("equipRef == @VAV-9", [HX_ZT]),  # bare Haystack id -> equipRef literal
         # --- the same words also reach Brick-only entities (B_*: typed, never tagged) ---
-        ("ahu", [AHU, B_RTU]),  # marker on AHU; Brick tag:AHU on RTU (via Rooftop_Unit <- Air_Handling_Unit)
+        ("ahu", ALL_AHUS),  # marker on AHU; Brick tag:AHU on RTU (via Rooftop_Unit <- Air_Handling_Unit) and on the extension's AHUs
         ("temp and air", [DAT, B_ZT]),  # `temp` is Haystack for Brick's tag:Temperature
         ("temp and not air", [ZT]),
         ("zone and not temp", [HX_ZT]),
         ("zone and air and temp and sensor", [B_ZT]),  # every word from the class name Zone_Air_Temperature_Sensor
         ("temperature and sensor", [DAT, B_ZT]),  # Brick's own spelling; DAT is typed Discharge_Air_Temperature_Sensor
         ("fan and run", [B_FAN]),  # no Brick tag for `run`: rules/haystack_to_brick.yaml [fan, run, sensor] -> Fan_Status, inverted
-        ("point", [DAT, FAN, ZT, HX_ZT, B_ZT, B_FAN]),
-        ("equip", [AHU, VAV, HX_VAV, B_RTU]),
-        ("point and id != @urn:point:fbf/ahu-1/dat", [FAN, ZT, HX_ZT, B_ZT, B_FAN]),
-        ("point and equipRef != @urn:equip:fbf/ahu-1", [ZT, HX_ZT, B_ZT, B_FAN]),
+        ("point", ALL_POINTS),
+        ("equip", ALL_EQUIP),
+        ("point and id != @urn:point:fbf/ahu-1/dat", [FAN, ZT, HX_ZT, B_ZT, B_FAN, WHEEL, BYPASS]),
+        ("point and equipRef != @urn:equip:fbf/ahu-1", [ZT, HX_ZT, B_ZT, B_FAN, WHEEL, BYPASS]),
         # --- Brick class names: hierarchy, aliases, case ---
-        ("Air_Handling_Unit", [AHU, B_RTU]),  # B_RTU is typed brick:RTU, an alias of a *subclass*
-        ("AHU", [AHU, B_RTU]),  # Brick's alias name for the class
-        ("air_handling_unit", [AHU, B_RTU]),  # case-insensitive
+        ("Air_Handling_Unit", ALL_AHUS),  # B_RTU is typed brick:RTU, an alias of a *subclass*; HRAHU/LAB_HRAHU/HRU via the extension
+        ("AHU", ALL_AHUS),  # Brick's alias name for the class
+        ("air_handling_unit", ALL_AHUS),  # case-insensitive
         ("Rooftop_Unit", [B_RTU]),
         ("Temperature_Sensor", [DAT, B_ZT]),  # subclasses
         ("Zone_Air_Temperature_Sensor", [B_ZT]),
         ("Fan_Status", [B_FAN]),  # via the PROJ subclass the graph declares
         ("Fan_Status_Variant", [B_FAN]),  # the PROJ class by its own name
-        ("Point", [DAT, B_ZT, B_FAN]),  # rdf:type-based; FAN/ZT/HX_ZT carry no Brick type
-        ("Equipment", [AHU, B_RTU]),
-        ("Sensor and not Temperature_Sensor", []),
+        ("Point", [DAT, B_ZT, B_FAN, WHEEL, BYPASS]),  # rdf:type-based; FAN/ZT/HX_ZT carry no Brick type
+        ("Equipment", ALL_AHUS),
+        ("Sensor and not Temperature_Sensor", [WHEEL, BYPASS]),
         ("Not_A_Brick_Class", []),
+        # --- a Brick extension in its own namespace: reachable every way Brick itself is ---
+        ("Heat_Recovery_AHU", [HRAHU, LAB_HRAHU, HRU]),  # by its own name: subtree + alias
+        ("heat_recovery_ahu", [HRAHU, LAB_HRAHU, HRU]),  # case-insensitive, same as Brick names
+        ("Lab_Heat_Recovery_AHU", [LAB_HRAHU]),  # two levels below Brick
+        ("HRU", [HRAHU, LAB_HRAHU, HRU]),  # the extension's own owl:equivalentClass alias, either direction
+        ("hru", [HRAHU, LAB_HRAHU, HRU]),  # as a plain word too - Brick's `ahu` works only because Brick ships a tag:AHU
+        ("heat and recovery", [HRAHU, LAB_HRAHU, HRU]),  # the tag words the extension declares (brick:hasAssociatedTag), inherited downward
+        ("Heat_Recovery_AHU and not Lab_Heat_Recovery_AHU", [HRAHU, HRU]),
+        ("Speed_Sensor", [WHEEL]),  # under its Brick parent
+        ("speed and sensor", [WHEEL]),  # Brick's tag words, declared on the extension class
+        ("rotor", [WHEEL]),  # a tag word Brick doesn't have - the extension's own brick:Tag
+        ("Damper_Position_Sensor", [BYPASS]),  # a class declared by rdfs:subClassOf alone still counts under its parent
+        ("Bypass_Damper_Position_Sensor", [BYPASS]),  # ... and by name
+        ('read(hru and dis == "HR-AHU 1")', [HRAHU]),
+        # --- ontology-level subjects are never entities, whichever ontology they belong to ---
+        ("Quantity", []),  # brick:Active_Energy is typed brick:Quantity - an individual, not an owl:Class
+        ("Building", []),  # the REC class Brick 1.4 embeds
+        ("not point", ALL_EQUIP),  # no owl:Class, brick:Tag, brick:Quantity, REC class, or extension class leaks through a negation
+        ("not ahu and not point", [VAV, HX_VAV]),
     ],
 )
 def test_compiled_filter_selects_the_right_entities(graph, text, expected):
@@ -287,25 +350,62 @@ def test_compiled_filter_selects_the_right_entities(graph, text, expected):
 
 
 def test_ontology_subjects_are_never_entities(graph):
-    # brick:Zone_Air_Temperature_Sensor and tag:Temperature are in the graph
-    # (as a loaded ontology would put them) - `Class`/`Tag` must not list them.
-    for text in ("Class", "Tag", "Zone_Air_Temperature_Sensor", "temperature"):
-        assert not any(uri.startswith("https://brickschema.org/") for uri in _match(graph, text)), text
+    # brick:Zone_Air_Temperature_Sensor, tag:Temperature, brick:Active_Energy,
+    # rec:Building and the acme:* classes/tag are all in the graph (as a loaded
+    # ontology would put them) - no filter may list any of them.
+    vocab_prefixes = ("https://brickschema.org/", "https://w3id.org/rec#", "https://acme.example/", "http://www.w3.org/")
+    for text in ("Class", "Tag", "Quantity", "Zone_Air_Temperature_Sensor", "temperature", "rotor", "not point", "not ahu"):
+        assert not any(uri.startswith(vocab_prefixes) for uri in _match(graph, text)), text
 
 
-def test_hints_name_near_miss_brick_vocabulary_only_when_nothing_matched():
+def test_graph_vocab_reads_the_extension_and_skips_bricks_own_triples(graph):
+    g = h.graph_vocab(graph)
+    assert g.children[str(BRICK.Air_Handling_Unit)] == {str(ACME.Heat_Recovery_AHU)}
+    assert g.children[str(ACME.Heat_Recovery_AHU)] == {str(ACME.Lab_Heat_Recovery_AHU)}
+    assert g.equivalents[str(ACME.HRU)] == {str(ACME.Heat_Recovery_AHU)} and g.equivalents[str(ACME.Heat_Recovery_AHU)] == {str(ACME.HRU)}
+    assert g.classes_named("HEAT_RECOVERY_ahu") == {str(ACME.Heat_Recovery_AHU)}
+    assert g.classes_tagged("rotor") == {str(ACME.Wheel_Speed_Sensor)} and g.classes_tagged("Heat") == {str(ACME.Heat_Recovery_AHU)}
+    assert g.expand({str(BRICK.Air_Handling_Unit)}) == {str(BRICK.Air_Handling_Unit), str(ACME.Heat_Recovery_AHU), str(ACME.Lab_Heat_Recovery_AHU), str(ACME.HRU)}
+    # Brick's own subClassOf (Zone_Air_Temperature_Sensor -> Air_Temperature_Sensor) is
+    # in the fixture too; brick_vocab owns that, so it must not be re-read here.
+    assert str(BRICK.Air_Temperature_Sensor) not in g.children
+    assert g.classes_named("Zone_Air_Temperature_Sensor") == set()
+    # Everything the extension declares is schema, including a tag and a class
+    # that only appears as the subject of an rdfs:subClassOf.
+    for iri in (ACME.Heat_Recovery_AHU, ACME.HRU, ACME.Rotor, ACME.Bypass_Damper_Position_Sensor, REC.Building, BRICK.Active_Energy):
+        assert g.is_schema(str(iri)), iri
+    assert not g.is_schema(str(HRAHU))
+
+
+def test_graph_vocab_is_one_query(graph):
+    calls = []
+    original = graph.query
+    graph.query = lambda sparql: calls.append(sparql) or original(sparql)
+    h.graph_vocab(graph)
+    assert len(calls) == 1
+
+
+def test_hints_name_near_miss_brick_vocabulary_only_when_nothing_matched(graph):
     hints = h.hints_for_empty_result(h.parse_query("Air_Handeling_Unit and temperture and hisqRunMarker").filter)
     assert {hint["token"]: hint["suggestions"][0] for hint in hints} == {"Air_Handeling_Unit": "Air_Handling_Unit", "temperture": "temperature"}
     # A valid class, tag word, Haystack rule marker, or structural alias is never "corrected".
     assert h.hints_for_empty_result(h.parse_query("Air_Handling_Unit and temp and run and point").filter) == []
+    # Nor is an extension's class, alias, or tag word - even when Brick has a near-miss for it.
+    g = h.graph_vocab(graph)
+    assert h.hints_for_empty_result(h.parse_query("Wheel_Speed_Sensor and hru and rotor").filter, g) == []
+    # ... which without the graph *would* be "corrected" (to Wind_Speed_Sensor / motor).
+    assert {hint["token"] for hint in h.hints_for_empty_result(h.parse_query("Wheel_Speed_Sensor and hru and rotor").filter)} == {"Wheel_Speed_Sensor", "rotor"}
 
 
 def test_compiled_sparql_never_walks_the_hierarchy_in_the_query(graph):
     # Oxigraph takes 1-50s on rdfs:subClassOf paths inside a filter with the
-    # full ontology loaded; every hop is resolved in Python beforehand.
-    sparql = h.compile_filter(h.parse_query("Temperature_Sensor and temperature").filter, h.custom_subclass_map(graph))
-    assert "subClassOf" not in sparql and "EXISTS" not in sparql.split("FILTER NOT EXISTS", 1)[1]
+    # full ontology loaded, and ~0.4s on a per-candidate NOT EXISTS; every
+    # hop is resolved in Python beforehand and schema subjects dropped after.
+    sparql = h.compile_filter(h.parse_query("Temperature_Sensor and temperature").filter, h.graph_vocab(graph))
+    assert "subClassOf" not in sparql and "EXISTS" not in sparql
     assert "Zone_Air_Temperature_Sensor" in sparql and "Fan_Status_Variant" not in sparql
+    sparql = h.compile_filter(h.parse_query("AHU").filter, h.graph_vocab(graph))
+    assert str(ACME.Lab_Heat_Recovery_AHU) in sparql and str(ACME.HRU) in sparql
 
 
 def test_string_values_are_escaped_not_interpolated(graph):
@@ -336,6 +436,8 @@ def test_describe_points_metadata_shape(graph):
     assert dat["equip"] == str(AHU) and dat["equipDis"] == "fbf/ahu-1"
     fan = meta[str(FAN)]
     assert fan["dis"] == "Fan Status" and fan["kind"] == "Bool" and fan["brickClass"] is None
+    # An extension class is a class: reported by its local name, not dropped as null.
+    assert h.describe_points(graph, [str(WHEEL)])[str(WHEEL)]["brickClass"] == "Wheel_Speed_Sensor"
     # Unknown point still gets a complete, null-filled record rather than a KeyError downstream.
     assert meta["urn:point:nowhere"]["dis"] == "nowhere" and meta["urn:point:nowhere"]["tags"] == []
 
