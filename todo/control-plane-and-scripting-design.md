@@ -1,14 +1,9 @@
 # Control plane & scripting — design for a building engineer
 
-**Status:** design proposal (no implementation in this change)
+**Status:** Slice A partially implemented (Ops status API + UI + install script). Remaining slices B–D still design-only.
 **Audience:** product / architecture decision
 **Date:** 2026-09-09
-**Evidence:** live Docker first-runs of community SkySpark
-(`phillipbirch/skyspark-latest`, UI reports 3.1.8) including a full click-
-through of Host / Settings / Debug / User / Doc instance-management apps;
-official Haxall (`ghcr.io/haxall/haxall`); inventory from this repo's
-`docker-compose.yml` and source.
-
+**Updated:** 2026-09-09 — Slice A landed: `ops_api`, `/ui/ops.html`, `scripts/install.sh`
 This document answers four questions in order:
 
 1. What does SkySpark's first-run feel like to a building engineer?
@@ -716,6 +711,8 @@ Design-only here; suggested build order when implementation starts:
 2. First-run org create embedded in UI (not curl).
 3. Ops Overview with platform chips driven by Compose health + simple
    probes (even before full `/ops/status`).
+4. Empty-state CTAs modeled on SkySpark Host → Projects: **Connect a
+   source** and **Load demo** (Demogen equivalent).
 
 ### Slice B — Truthful status
 1. Heartbeats for the three pure daemons.

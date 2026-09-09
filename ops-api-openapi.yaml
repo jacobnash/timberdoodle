@@ -1,0 +1,80 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Ops API
+  version: 0.1.0
+  description: >
+    Building-engineer control-plane status. Aggregates platform and job
+    health into plain-language states (ok / quiet / degraded / down).
+paths:
+  /status:
+    get:
+      operationId: getOpsStatus
+      summary: Aggregated Ops status
+      responses:
+        "200":
+          description: Status document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpsStatus"
+        "401":
+          description: Missing or invalid gateway secret
+  /openapi.yaml:
+    get:
+      operationId: getOpsOpenAPI
+      summary: This OpenAPI document
+      responses:
+        "200":
+          description: YAML OpenAPI spec
+components:
+  schemas:
+    ComponentState:
+      type: object
+      required: [id, label, layer, service, state]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        layer: { type: string, enum: [platform, jobs, tools] }
+        service: { type: string }
+        state: { type: string, enum: [ok, quiet, degraded, down] }
+        detail: { type: ["string", "null"] }
+    OpsStatus:
+      type: object
+      required: [summary, generated_at, building, platform, jobs, tools, attention, first_actions]
+      properties:
+        summary: { type: string, enum: [ok, degraded, down] }
+        generated_at: { type: string, format: date-time }
+        building:
+          type: object
+          required: [points_seen_last_hour, open_faults, disabled_derivation_targets, needs_first_org]
+          properties:
+            last_ingest_at:
+              type: ["string", "null"]
+              format: date-time
+            points_seen_last_hour: { type: integer }
+            open_faults: { type: integer }
+            disabled_derivation_targets: { type: integer }
+            needs_first_org: { type: boolean }
+        platform:
+          type: array
+          items: { $ref: "#/components/schemas/ComponentState" }
+        jobs:
+          type: array
+          items: { $ref: "#/components/schemas/ComponentState" }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/ComponentState" }
+        attention:
+          type: array
+          items: { $ref: "#/components/schemas/ComponentState" }
+        first_actions:
+          type: array
+          items:
+            type: object
+            required: [id, label, href, description, enabled]
+            properties:
+              id: { type: string }
+              label: { type: string }
+              href: { type: string }
+              description: { type: string }
+              enabled: { type: boolean }

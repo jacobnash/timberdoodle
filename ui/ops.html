@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Timberdoodle — Ops</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="console.css" />
+  <link rel="stylesheet" href="ops.css" />
+</head>
+<body>
+  <header>
+    <h1>Ops</h1>
+    <span id="status">connecting…</span>
+    <span id="system-chip" class="system-chip" hidden></span>
+    <nav class="top-nav">
+      <a href="index.html">Equipment tree</a>
+      <a href="his.html">Query</a>
+      <a href="alarms.html">Alarms</a>
+      <a href="derivations.html">Derivations</a>
+      <a href="devices.html">Devices</a>
+      <a href="ops.html">Ops</a>
+    </nav>
+  </header>
+  <div id="login-gate" class="login-gate">
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="hint" hidden></p>
+      <p class="hint"><button type="button" id="show-create-org" class="linkish">First time? Create an organization</button></p>
+    </form>
+    <form id="create-org-form" hidden>
+      <h2>Create organization</h2>
+      <label>Organization <input type="text" id="org-name" required /></label>
+      <label>Admin email <input type="email" id="org-email" autocomplete="username" required /></label>
+      <label>Admin password <input type="password" id="org-password" autocomplete="new-password" required /></label>
+      <button type="submit">Create &amp; sign in</button>
+      <p id="org-error" class="hint" hidden></p>
+      <p class="hint"><button type="button" id="show-login" class="linkish">Back to sign in</button></p>
+    </form>
+  </div>
+  <main id="main" class="console-main" style="display: none">
+    <section id="empty-cta" class="ops-cta" hidden>
+      <h2>You're up. No building data yet.</h2>
+      <p class="hint">First useful action — same idea as SkySpark Host → Projects → New / Demogen.</p>
+      <div class="cta-row">
+        <a class="cta" href="devices.html">Connect a source</a>
+        <button class="cta cta-disabled" type="button" disabled title="Not wired yet">Load demo site</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Building</h2>
+      <div id="building-summary" class="ops-grid"></div>
+    </section>
+
+    <section>
+      <h2>Needs attention</h2>
+      <div id="attention-list" class="ops-list hint">Nothing right now.</div>
+    </section>
+
+    <section>
+      <h2>Platform</h2>
+      <div id="platform-chips" class="ops-grid"></div>
+    </section>
+
+    <section>
+      <h2>Jobs</h2>
+      <div id="jobs-chips" class="ops-grid"></div>
+    </section>
+
+    <section>
+      <h2>Tools</h2>
+      <div id="tools-chips" class="ops-grid"></div>
+    </section>
+  </main>
+  <script src="auth.js"></script>
+  <script src="ops.js"></script>
+</body>
+</html>

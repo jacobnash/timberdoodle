@@ -57,6 +57,9 @@ const ROUTES = [
   // validate_api
   ["POST",   /^\/validate\/validate$/,               "validate", "viewer"],
 
+  // ops_api
+  ["GET",    /^\/ops\/status$/,                      "ops", "viewer"],
+
   // auth_api - POST /auth/login has its own exact-match nginx location
   // with no js_access at all (can't require a token to get a token), so
   // it deliberately has no row here.
