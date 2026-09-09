@@ -3,9 +3,10 @@
 **Status:** design proposal (no implementation in this change)
 **Audience:** product / architecture decision
 **Date:** 2026-09-09
-**Evidence:** live Docker first-runs of community SkySpark 3.1.18
-(`phillipbirch/skyspark-latest`) and official Haxall
-(`ghcr.io/haxall/haxall`); inventory from this repo's
+**Evidence:** live Docker first-runs of community SkySpark
+(`phillipbirch/skyspark-latest`, UI reports 3.1.8) including a full click-
+through of Host / Settings / Debug / User / Doc instance-management apps;
+official Haxall (`ghcr.io/haxall/haxall`); inventory from this repo's
 `docker-compose.yml` and source.
 
 This document answers four questions in order:
@@ -70,40 +71,115 @@ Within ~3 seconds of start:
 
 HTTP comes up anyway. `/` redirects to `/user/login`. Login with the
 community-image default `su` / `su` works. After login the host home
-shows five tiles — Debug, Doc, Host, Settings, User — and a persistent
-red **"No license Installed"** chip.
+shows five tiles — **Debug, Doc, Host, Settings, User** — and a
+persistent red **"No license Installed"** chip.
+
+Those five tiles are not decoration. They *are* SkySpark's instance
+control plane. Clicking into them is how you manage the running host
+without a terminal. We walked each app on this live instance; the
+lessons below are from that pass, not from brochure copy.
 
 What a building engineer sees immediately:
 
 | Moment | Experience |
 |---|---|
 | After install | Login page with SkySpark branding. Looks finished. |
-| After login | Host dashboard with five admin tiles + license warning. |
-| First useful building action | **Not available.** No project, no points, no historian UI path that works without a license. |
-| "Is it broken?" | Ambiguous. The UI loads; the red chip says it isn't really licensed; Docs and Settings still open. |
+| After login | Host dashboard with five admin apps + license warning. |
+| First useful action *on this screen* | Open **Host → Projects → New** or **Demogen** — create a project / generate demo data. |
+| Building analytics work | Blocked or uncertain under the license wall (exts shut down at boot). |
+| "Is the instance itself manageable?" | **Yes** — Host / Settings / Debug / User still operate as an admin surface. |
 
-### 1.3 Where it is clunky (for this audience)
+### 1.3 The host apps — how SkySpark manages the instance
 
-1. **License wall after a successful login.** The product looks alive
-   while extensions are shut down. That is worse than a hard fail —
-   engineers waste time exploring tiles that cannot do building work.
-2. **Host-centric first screen.** The first useful mental model for this
-   user is *a building / a project / points*, not *sys mods and host
-   diagnostics*. Settings → SysMods is a wall of module names (`axon`,
-   `hx`, `folio`, …) that means nothing until you already know SkySpark.
-3. **Docs are excellent; discovery is not.** The built-in Doc index
-   (Axon, Haystack, Fresco, libs) is strong. Finding "write my first
-   useful script against live data" from the host home is not.
-4. **Docker story is unofficial and incomplete.** No official image;
-   community images need a non-obvious working directory and binary path;
-   Java is baked in but the license is not; Windows/Mac users still hit
-   the same license + project-bootstrap wall after the container is up.
-5. **Single-app strength is real.** Once licensed and project-loaded,
-   SkySpark *is* one surface: UI, historian, Axon, connectors. That
-   coherence is the bar Timberdoodle must meet emotionally, even if the
-   internals stay multi-container.
+This is the part to steal. One process, five apps, no `systemctl`.
 
-### 1.4 Haxall as the open-source sibling (same session)
+#### Host — runtime objects
+
+Tabs: **Projects, Cluster, Crypto, Install, Licenses, Mounts, Replicas,
+Sessions**.
+
+| Tab | What you can do (concrete UI) |
+|---|---|
+| **Projects** | Table of projects (`id`, `route`, `routeStatus`, `backup`, …). Buttons: **New**, **Demogen**, Rename, Delete, Details, Backup, Replicate. Empty on first run — **New** / **Demogen** is the obvious next step. Creating a project does **not** require a restart. |
+| **Install** | Pod/extension inventory (BACnet, demogen, docker, …). Update / Install / Downgrade / Uninstall / StackHub Login. Module changes typically need a restart. |
+| **Licenses** | Install / Update from Cloud / Uninstall; Effective License panel (`points`, `features`, `weather`); Host Info for licensing identity. |
+| **Sessions** | Who is logged in (user, IP, browser, lease); Logout / Details. |
+| **Cluster / Replicas / Crypto / Mounts** | Multi-node, DB replication, trust store, filesystem mounts — power-user / IT territory, but present in the same app. |
+
+**First useful action on a fresh host:** Host → Projects → **New** (or
+**Demogen**). That is clearer than Timberdoodle's current "curl an org,
+then figure out FBF."
+
+#### Settings — what is enabled and how it listens
+
+Tabs include **SysMods, API, Cluster, Email, HTTP, Host, Log, Session,
+User, XQuery**.
+
+| Tab | Why it matters |
+|---|---|
+| **SysMods** | ~40 modules with `libStatus` (Ok / Disabled), `enabled` (`boot`), docs, depends. **Enable / Disable** selected rows. This is "turn LDAP on / email off" without editing files. Changes need a restart; there is **no Apply & Restart** on the screen. |
+| **HTTP** | `httpPort` (8080), `httpsEnabled`, `siteUri`, bind address — the "what port am I on" page. Restart required. |
+| **Email** | SMTP URL / TLS / credentials with a **Test** button (hot, no restart). |
+| **Log / Session / User / API** | Retention, timeouts, lockout, API hardening — all form fields + Submit. |
+
+SysMods is the closest SkySpark analogue to "which of my services /
+capabilities are on." Status is visible as a column (`libStatus: Ok`),
+not buried in a process list.
+
+#### Debug — health without SSH
+
+Tabs: **Alerts, Cluster, Diagnostics, Host, Log, Pods, Threads,
+Support**.
+
+| Tab | Affordance |
+|---|---|
+| **Diagnostics** | Live cards: System (version, PID, uptime, paths), Projects count, Java, **CPU graph**, physical memory graph, Java heap, GC. This is the "is the box sick?" page. |
+| **Log** | In-browser log stream with level filter / pause / search — no `docker logs`. |
+| **Alerts** | System warnings (license among them) with links into docs. |
+| **Pods / Threads** | Installed pod detail; thread dump with CPU — deeper than most building engineers need, available when support asks. |
+| **Support** | One-click diagnostic bundle. |
+
+#### User / Doc
+
+- **User**: account table (su), role protos, user-DB backup/restore.
+- **Doc**: in-product manuals (Axon, Haystack, Fresco, libs) — genuinely
+  strong.
+
+### 1.4 What SkySpark gets right (instance management)
+
+1. **One browser surface for admin.** Projects, modules, HTTP port,
+   sessions, logs, CPU — not five CLIs and a wiki.
+2. **Projects as the unit of building work**, created from a button, with
+   **Demogen** beside **New**.
+3. **Module enable/disable with status columns** (SysMods `libStatus`),
+   not "edit compose and hope."
+4. **Debug Diagnostics + Log** answer "something's wrong" without leaving
+   the product.
+5. **Support bundle** — one click for when you escalate.
+
+Timberdoodle's Ops page should be *this shape* — host apps mapped onto
+a multi-container reality — not a Docker Desktop clone.
+
+### 1.5 Where it is still clunky (for this audience)
+
+1. **License wall after a successful login.** Exts shut down at boot;
+   the admin apps still work, which makes it unclear what building work
+   is actually possible. Ambiguity is worse than a hard fail.
+2. **Jargon tax.** "SysMods", "pods", `libStatus`, `routeStatus` —
+   fine for SkySpark natives, opaque for a stationary engineer on day
+   one. The *structure* is right; the *labels* assume prior art.
+3. **No restart from the UI.** SysMods and HTTP say "change this," then
+   strand you at Docker/systemd/`fanlaunch`. The control plane stops one
+   step short of the action it implies.
+4. **Empty Projects table without a guided first run.** New/Demogen are
+   there, but nothing says "click Demogen to see a building."
+5. **Docker story is unofficial.** No official image; community image
+   defaults to bash; Java is baked in, license is not.
+6. **Single-app strength is real** once licensed and project-loaded —
+   UI, historian, Axon, connectors share one skin. That emotional bar
+   still stands.
+
+### 1.6 Haxall as the open-source sibling (same session)
 
 Official `ghcr.io/haxall/haxall` starts cleanly. Init prints a one-time
 superuser password to container logs (easy to miss if you started via
@@ -116,8 +192,15 @@ a blank REPL, no unit tests, no packaged analysis library beyond what
 ships in `funcs()`, and no guardrail against saving a slow recursive
 query that will run forever on a shared host.
 
-**Takeaway for Timberdoodle:** copy Haxall's "first useful action is one
-screen away" instinct. Do **not** copy "the product *is* a REPL."
+**Takeaways for Timberdoodle:**
+
+- From **SkySpark Host apps**: ship one in-product control plane
+  (projects/sites, enable/disable capabilities, diagnostics, logs,
+  sessions, support bundle) — not a terminal, not Portainer.
+- From **Haxall**: first useful action one screen away. Do **not** make
+  the product *be* a REPL.
+- Close SkySpark's gap: **Apply & Restart** (and start/stop of optional
+  jobs) must live in that same UI.
 
 ---
 
@@ -245,7 +328,9 @@ opening five tabs and a terminal.
 ## 3. Control-plane UX design
 
 Not a Kubernetes dashboard. A **building control room for the software
-that watches the building**.
+that watches the building** — SkySpark's Host / Settings / Debug shape,
+translated across Timberdoodle's multi-container reality, with the
+restart button SkySpark forgot.
 
 ### 3.1 Product framing
 
@@ -254,13 +339,26 @@ Call it **Ops** (or **System**) — a first-class page in the existing
 Devices. It is the page the install script opens when the stack first
 comes up.
 
+Steal SkySpark's five-app split, rename for the audience:
+
+| SkySpark host app | Timberdoodle Ops analogue | Notes |
+|---|---|---|
+| **Host → Projects** (+ Demogen) | **Sites / data** + "Load demo" | Org/site already exists in `auth_api`; surface create + demo as the empty-state CTA |
+| **Settings → SysMods** | **Jobs & sources** enable/disable | Map to compose services + profiles with plain names and Ok/Quiet/Down (SysMods `libStatus` without the jargon) |
+| **Settings → HTTP / Email / …** | **Platform settings** | Gateway URL, MQTT, webhook allow-private — forms, not `.env` spelunking |
+| **Debug → Diagnostics** | **Health** | Required: ingest freshness, open faults, disabled derivation targets, API probes; host CPU/disk optional later |
+| **Debug → Log** | **Recent log** per job | Tail allowlisted container logs in-browser |
+| **Debug → Support** | **Download diagnostics** | Bundle compose ps, last errors, versions |
+| **Host → Sessions / User** | Account admin (existing auth UI) | Link from Ops; don't rebuild |
+| **Host → Install / Licenses** | **Updates** (later); no license wall | Catalog packs / image update — not StackHub+EULA day one |
+
 Mental model: three layers the engineer already understands.
 
 | Layer | Analogy | Examples |
 |---|---|---|
 | **Building data** | "Are my points alive?" | last ingest age, open faults, derivation outputs |
-| **Jobs** | "Are my analyses running?" | fault detector, derivation engine, each puller |
-| **Platform** | "Is the machine okay?" | postgres, oxigraph, mqtt, gateway |
+| **Jobs** | "Are my analyses running?" (SysMods, plain language) | fault detector, derivation engine, each puller |
+| **Platform** | "Is the machine okay?" (Diagnostics) | postgres, oxigraph, mqtt, gateway |
 
 Never lead with container names. Lead with jobs and outcomes; drill to
 containers only when diagnosing.
@@ -279,6 +377,9 @@ containers only when diagnosing.
 3. Create org (first-run form) → land on Ops
 ```
 
+Mirror SkySpark's Host → Projects empty state, but label the intent
+(SkySpark shows New/Demogen; we say what they're for):
+
 **Ops first paint** (empty site, healthy platform):
 
 ```
@@ -286,12 +387,14 @@ containers only when diagnosing.
 │  Timberdoodle                          System: All green    │
 │  Equipment · Query · Alarms · Derivations · Devices · Ops   │
 ├─────────────────────────────────────────────────────────────┤
+│  Overview · Jobs · Platform · Health · Logs                 │
+├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  You're up. No building data yet.                           │
 │                                                             │
 │  First useful action                                        │
 │  ┌──────────────────┐  ┌──────────────────┐                 │
-│  │ Connect a source │  │ Load demo site   │                 │
+│  │ Connect a source │  │ Load demo site   │  ← like Demogen │
 │  │  MQTT / FBF      │  │  (mock hospital) │                 │
 │  └──────────────────┘  └──────────────────┘                 │
 │                                                             │
@@ -306,28 +409,30 @@ containers only when diagnosing.
 
 Copy rules:
 
-- **One headline, one next step.** After install the next step is always
-  "get data in" or "try the demo."
+- **One headline, one next step.** After install: get data in or try the
+  demo (SkySpark: New / Demogen).
 - No container grid on first paint.
-- No Jaeger / Grafana / SPARQL links in the hero. Those live under
-  **Advanced** for people who want them.
+- No Jaeger / Grafana / SPARQL links in the hero — **Advanced** only.
+- One Ops chrome with tabs is enough; we do not need five separate tile
+  apps at our scale.
 
 ### 3.3 First useful action
 
 Priority order for an empty install:
 
 1. **Connect live data (FBF / MQTT)** — the real job.
-2. **Load demo site** — if FBF isn't ready; ships sample equipment +
+2. **Load demo site** — SkySpark's Demogen equivalent; sample equipment +
    histories so Query / Alarms / Derivations are immediately meaningful.
 3. **Pull from existing Haystack/SkySpark** — profile-gated
    `haystack_puller`, configured from a form (URL, user, password), not
    by editing compose.
 
-SkySpark's first useful action (once licensed) is: open a project and
-query. Ours should be: **see a point move**, then **open or silence a
-fault**, then **save a tested derivation**. Ops exists so those three
-aren't blocked by "which of 14 containers is wedged?"
-
+SkySpark's path is: Host → Projects → New/Demogen → (licensed) query.
+Ours should be: **see a point move**, then **open or silence a fault**,
+then **save a tested derivation**. Ops exists so those three aren't
+blocked by "which of 14 containers is wedged?" — and so enable/disable/
+restart feel as direct as SysMods, with the Apply & Restart SkySpark
+omits.
 ### 3.4 How they know something is broken
 
 Status model (four states, plain language):
@@ -386,17 +491,26 @@ Hard rules:
 
 ### 3.6 Information architecture of Ops
 
-Three tabs inside Ops:
+Five tabs inside Ops (SkySpark Host/Settings/Debug collapsed into one
+place a building engineer can find):
 
 1. **Overview** — building outcomes + platform chips + attention list
-2. **Jobs** — listener, detectors, engines, each configured puller
-3. **Platform** — historian, model store, live bus, gateway, auth, optional tools
+   (SkySpark host home + Diagnostics summary)
+2. **Jobs** — listener, detectors, engines, each configured puller;
+   Enable/Disable/Restart like SysMods, with plain names
+3. **Platform** — historian, model store, live bus, gateway, auth,
+   optional tools; settings forms where safe (SkySpark Settings → HTTP
+   etc.)
+4. **Health** — Diagnostics equivalent: freshness, fault counts,
+   disabled targets, probe results; optional host CPU/disk later
+5. **Logs** — per-job recent log (SkySpark Debug → Log)
 
-Each row shows: name (engineer language), state, "last useful signal",
-primary action.
+Each Jobs/Platform row shows: name (engineer language), state, "last
+useful signal", primary action (**Restart** always present — the button
+SkySpark's SysMods screen lacks).
 
-Optional fourth tab **Advanced** (collapsed by default): raw container
-names, ports, Jaeger, Grafana, OpenAPI links, "copy diagnostics bundle."
+**Advanced** (link, not a peer tab): raw container names, ports, Jaeger,
+Grafana, OpenAPI, **Download diagnostics** (SkySpark Support bundle).
 
 ### 3.7 Health API we need to add
 
@@ -444,10 +558,11 @@ Sources to aggregate (already mostly exist):
 
 | Option | Pros | Cons | Recommendation |
 |---|---|---|---|
-| **A. Ops page in existing `/ui/`** | One app; matches "single surface" SkySpark strength; reuses auth | Must keep UI honest about multi-container reality | **Do this** |
-| **B. Ship Portainer / Dozzle beside compose** | Fast; familiar to IT | Wrong audience; container-native language; no building semantics | Reject as primary; Advanced link only |
-| **C. Collapse to one container** | Trivial status | Loses independent restart, scaling, fault isolation that compose already gives | Reject |
-| **D. Full k8s operator UX** | Powerful | Guarantees the user becomes a platform engineer | Reject |
+| **A. Ops in `/ui/`, shaped like SkySpark Host/Settings/Debug** | Proven admin IA; one app; can add Restart SkySpark lacks | Must map multi-container jobs to SysMods-like rows | **Do this** |
+| **B. Ship Portainer / Dozzle beside compose** | Fast; familiar to IT | Wrong audience; weaker than SkySpark Debug/Log for this user | Reject as primary; Advanced link only |
+| **C. Collapse to one container** | Trivial status | Loses independent restart / isolation compose already gives | Reject |
+| **D. Full k8s operator UX** | Powerful | User becomes a platform engineer | Reject |
+| **E. Five separate mini-apps copying SkySpark tiles literally** | Familiar to migrants | Over-structures a smaller product | Reject — one Ops with tabs |
 
 **Ops agent privilege model** tradeoff:
 
@@ -653,18 +768,26 @@ run the building — without inheriting the scripting rot.
 | Artifact | What it shows |
 |---|---|
 | SkySpark boot log | `No license installed` / `Fatal licensing err; shutting down exts` then `http started on port 8080` |
-| `/opt/cursor/artifacts/skyspark-login.png` | Login |
-| `/opt/cursor/artifacts/skyspark-home-with-license-warning.png` | Host home + license chip |
-| `/opt/cursor/artifacts/skyspark-settings-sysmods.png` | SysMods wall |
-| `/opt/cursor/artifacts/skyspark-doc-index.png` | Strong built-in docs |
-| `/opt/cursor/artifacts/haxall-shell.png` | REPL-first landing |
+| `/opt/cursor/artifacts/skyspark-home-with-license-warning.png` | Host home tiles + license chip |
+| `/opt/cursor/artifacts/skyspark-host-app-projects.png` | Host → Projects (New / Demogen; empty table) |
+| `/opt/cursor/artifacts/skyspark-host-app-new-project.png` | New Project dialog |
+| `/opt/cursor/artifacts/skyspark-host-app-install.png` | Host → Install (pods/extensions) |
+| `/opt/cursor/artifacts/skyspark-host-app-licenses.png` | Host → Licenses |
+| `/opt/cursor/artifacts/skyspark-host-app-sessions.png` | Host → Sessions |
+| `/opt/cursor/artifacts/skyspark-settings-sysmods-detail.png` | Settings → SysMods Enable/Disable + detail |
+| `/opt/cursor/artifacts/skyspark-settings-http.png` | Settings → HTTP (`httpPort`) |
+| `/opt/cursor/artifacts/skyspark-debug-diagnostics.png` | Debug → Diagnostics (CPU/mem/uptime) |
+| `/opt/cursor/artifacts/skyspark-debug-log.png` | Debug → Log (in-browser) |
+| `/opt/cursor/artifacts/skyspark-debug-support.png` | Debug → Support bundle |
+| `/opt/cursor/artifacts/skyspark-user-users.png` | User → Users |
+| `/opt/cursor/artifacts/haxall-shell.png` | Haxall REPL-first landing |
 | `/opt/cursor/artifacts/haxall-libs-listing.png` | `libs()` introspection |
-| `/opt/cursor/artifacts/haxall-funcs-discovery.png` | `funcs()` discovery |
+| Full writeup | `/opt/cursor/artifacts/skyspark-instance-management-report.md` |
 
-Image used: `phillipbirch/skyspark-latest` (unofficial, 3.1.18).
-Haxall: `ghcr.io/haxall/haxall` (su password printed once in container
-logs). Official SkySpark Docker does not exist; licensed feature surface
-beyond the license wall was not exercised.
+Image used: `phillipbirch/skyspark-latest` (unofficial; UI reports 3.1.8).
+Haxall: `ghcr.io/haxall/haxall`. Official SkySpark Docker does not exist;
+licensed analytics beyond the license wall were not exercised — **host
+admin apps above were**.
 
 ## Appendix B — Engineer language ↔ compose services
 
