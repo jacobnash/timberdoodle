@@ -72,6 +72,38 @@ friends generate survives every redeploy.
    from GitHub's secret UI (write-only, so re-set rather than "view") if
    you need a reminder, or rotate them there directly.
 
+## Demo data (mock hospital)
+
+Without this, the demo is just an empty app past login. `deploy/nash-srv/docker-compose.fbf.yml`
+runs a simulated BACnet device (`fbf.mock_device`) and FBF's own discovery/
+API service (`fbf.api`) as two more services in the regular deploy - built
+from `deploy/nash-srv/fbf.Dockerfile` against the `fbf/` submodule, joined
+to a small fixed-IP `bacnet-mock` network (`172.30.0.0/24`) since BACnet/IP
+needs a literal address on both sides, not a hostname. Confirmed working
+over a normal Docker bridge network - BACnet unicast (not broadcast, which
+doesn't cross bridge networks) is all this needs. `fbf_api` also joins the
+default network to reach `mosquitto` by service name, same as every other
+daemon. Its connection state persists in a named volume (`fbf-state`, like
+`postgres-data`/`oxigraph-data`) so redeploys don't wipe provisioning.
+
+One-time (not per-deploy - `scripts/seed_derivations_and_faults.py` isn't
+safe to re-run, it'd create duplicate derivations):
+
+```bash
+cd ~/timberdoodle-deploy   # or wherever the checkout actually is
+DEMO_ADMIN_EMAIL=<same as the GitHub secret> DEMO_ADMIN_PASSWORD=<same> \
+  bash deploy/nash-srv/seed-demo-data.sh
+```
+
+Provisions fbf.api against the mock device (~500 points across ~90
+equipment), waits for `mqtt_listener` to ingest some of it, runs `autotag
+--no-llm` (rule engine only - no `ANTHROPIC_API_KEY` needed, some points
+stay unclassified without the LLM fallback but the rule engine covers the
+common cases), then seeds real Brick derivations/fault rules through the
+gateway using the same demo account. Run as `jacob` (already in the
+`docker` group on this box) - not through the runner's sudoers wrapper,
+this needs `docker compose exec`, not just `up`.
+
 ## FBF submodule
 
 `fbf/` is a separate, independently-versioned private repo

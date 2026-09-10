@@ -37,6 +37,7 @@ ENV_FILE="${ENV_DIR}/nash-srv.env"
 WORKDIR="${RUNNER_DIR}/_work/timberdoodle/timberdoodle"
 COMPOSE_BASE="${WORKDIR}/docker-compose.yml"
 COMPOSE_OVERRIDE="${WORKDIR}/deploy/nash-srv/docker-compose.override.yml"
+COMPOSE_FBF="${WORKDIR}/deploy/nash-srv/docker-compose.fbf.yml"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "must run as root (sudo)" >&2
@@ -76,8 +77,8 @@ cat > "$WRAPPER" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "${WORKDIR}"
-docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_FILE}" pull --ignore-pull-failures
-docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_FILE}" up -d --build
+docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" -f "${COMPOSE_FBF}" --env-file "${ENV_FILE}" pull --ignore-pull-failures
+docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" -f "${COMPOSE_FBF}" --env-file "${ENV_FILE}" up -d --build
 # The app containers bind-mount this checkout (.:/app) and run as root, so
 # anything they write into it (e.g. __pycache__/*.pyc) ends up root-owned -
 # the *next* actions/checkout runs as github-runner and can't git-clean
@@ -87,7 +88,7 @@ chown -R "${RUNNER_USER}:${RUNNER_USER}" "${WORKDIR}"
 # Gateway caches upstream addresses at its own startup - if a backend got
 # recreated above without gateway also restarting, its routes 404/502 even
 # though the backend is healthy (see CLAUDE.md's gateway restart gotcha).
-docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_FILE}" restart gateway
+docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" -f "${COMPOSE_FBF}" --env-file "${ENV_FILE}" restart gateway
 # Block here instead of handing control back to the caller (the deploy
 # workflow) while gateway is mid-restart - otherwise its very next step
 # can race a connection reset. Any HTTP response (even a 4xx from a
