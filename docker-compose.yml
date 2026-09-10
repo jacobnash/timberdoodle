@@ -196,6 +196,17 @@ services:
       <<: *http-api-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/openapi.yaml')"]
 
+  ops_api:
+    build: .
+    command: python -m timberdoodle.ops_api
+    environment: *daemon-env
+    volumes:
+      - .:/app
+    depends_on: *daemon-depends-on
+    healthcheck:
+      <<: *http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/openapi.yaml')"]
+
   haystack_puller:
     build: .
     command: python -m timberdoodle.haystack_puller
@@ -292,6 +303,8 @@ services:
       validate_api:
         condition: service_healthy
       auth_api:
+        condition: service_healthy
+      ops_api:
         condition: service_healthy
 
 volumes:
