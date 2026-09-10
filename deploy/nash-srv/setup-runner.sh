@@ -78,6 +78,12 @@ set -euo pipefail
 cd "${WORKDIR}"
 docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_FILE}" pull --ignore-pull-failures
 docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_FILE}" up -d --build
+# The app containers bind-mount this checkout (.:/app) and run as root, so
+# anything they write into it (e.g. __pycache__/*.pyc) ends up root-owned -
+# the *next* actions/checkout runs as github-runner and can't git-clean
+# those, failing the whole next deploy with EACCES before it even starts.
+# Hand the tree back after every run so that never accumulates.
+chown -R "${RUNNER_USER}:${RUNNER_USER}" "${WORKDIR}"
 # Gateway caches upstream addresses at its own startup - if a backend got
 # recreated above without gateway also restarting, its routes 404/502 even
 # though the backend is healthy (see CLAUDE.md's gateway restart gotcha).
