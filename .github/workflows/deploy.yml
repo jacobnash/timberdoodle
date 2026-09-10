@@ -28,6 +28,12 @@ jobs:
           # supplies a read-only deploy key for it, since actions/checkout's
           # token only covers this repo, not other private repos.
           submodules: true
+          # checkout's default persist-credentials: true rewrites every
+          # git@github.com: URL (submodules included) to https://github.com/
+          # using its own token before cloning - that silently defeats the
+          # SSH deploy key above and fails with "repository not found"
+          # trying to fetch fbf over HTTPS with a token that can't see it.
+          persist-credentials: false
 
       - name: Deploy stack
         # The only command this runner user can run as root - see
