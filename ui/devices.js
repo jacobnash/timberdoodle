@@ -263,5 +263,9 @@ async function loadAll() {
   }
 }
 
-loadAll();
-setInterval(loadAll, REFRESH_INTERVAL_MS);
+function init() {
+  loadAll();
+  setInterval(loadAll, REFRESH_INTERVAL_MS);
+}
+
+initAuth(init);

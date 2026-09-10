@@ -2,16 +2,16 @@
    table/badge/dialog styling now lives in style.css (shared with
    derivations.html/alarms.html). */
 
-#devices-main {
+#main {
   display: block;
   height: auto;
   padding: 1rem;
   overflow-y: auto;
 }
 
-#devices-main section { margin-bottom: 2rem; }
-#devices-main h2 { font-size: 1rem; margin: 0 0 0.5rem; }
-#devices-main h2 .hint { font-weight: normal; font-size: 0.8rem; }
+#main section { margin-bottom: 2rem; }
+#main h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+#main h2 .hint { font-weight: normal; font-size: 0.8rem; }
 
 /* --badge-color, not border-color/color directly - style.css's shared
    .badge base rule derives both the text color and the tinted background

@@ -1,7 +1,9 @@
 // Shared gateway-auth login-gate logic (token storage, login form, 401
 // handling) - used by every page that talks to a JWT-gated API through the
-// gateway (index.html, derivations.html, alarms.html). devices.html talks
-// to a separate, unauthenticated API (fbf.api) and has no use for this.
+// gateway (index.html, derivations.html, alarms.html), and also by
+// devices.html purely to require sign-in before the page renders at all -
+// devices.js itself still talks straight to a separate, unauthenticated
+// API (fbf.api) and never calls authHeaders()/handleUnauthorized().
 // Plain global functions, no module system - same "no build step" spirit
 // as every other file in ui/. Expects a page to declare the login-gate
 // markup with these exact ids (see index.html) before loading this script.

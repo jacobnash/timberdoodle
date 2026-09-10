@@ -18,7 +18,21 @@
       <a href="ops.html">Ops</a>
     </nav>
   </header>
-  <main id="devices-main">
+  <!-- auth.js decides which of these two is shown - devices.js itself
+       still talks straight to fbf.api (see auth.js's comment on why: a
+       separate, unauthenticated service), but the page shell requires a
+       timberdoodle login before it renders at all, same as every other
+       page here. -->
+  <div id="login-gate" class="login-gate">
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <label>Email <input type="email" id="login-email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="login-password" autocomplete="current-password" required /></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="hint" hidden></p>
+    </form>
+  </div>
+  <main id="main" style="display: none">
     <section>
       <h2>Discovered devices <span class="hint">(from FBF's periodic BACnet Who-Is scan and, if configured, Modbus subnet sweeps)</span></h2>
       <table id="devices-table">
@@ -72,6 +86,7 @@
       </form>
     </dialog>
   </main>
+  <script src="auth.js"></script>
   <script src="devices.js"></script>
 </body>
 </html>
