@@ -259,7 +259,12 @@ async function loadAll() {
     renderModbusConnections(modbusConnections);
     statusEl.textContent = `${devices.length} known devices, ${connections.length + modbusConnections.length} connections`;
   } catch (err) {
-    statusEl.textContent = `failed to reach fbf.api at ${FBF_API_URL}: ${err.message}`;
+    // The default FBF_API_URL (localhost:8001) is only ever reachable if
+    // *you* have FBF running on the machine viewing this page - it's a
+    // separate BACnet/Modbus bridge project, not something this deploy
+    // stands up. Spell that out instead of a bare fetch error, since on a
+    // public deployment every visitor hits this by default.
+    statusEl.textContent = `Can't reach fbf.api at ${FBF_API_URL} (${err.message}). This page only works against your own local FBF instance - run FBF, or add ?fbf=<url> pointing at one you have access to.`;
   }
 }
 
