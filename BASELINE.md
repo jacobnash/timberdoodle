@@ -41,3 +41,21 @@ Stage 2.1 (extracting `http_handler_base.py` for the 5 stdlib HTTP APIs) is the 
 | `todo/http-handler-base-extraction.md` | didn't exist | written — the design-record note `PLAN.md`'s own Guardrails section called for |
 
 `ruff` stays non-blocking until the 3 remaining findings (all in uncommitted WIP) are resolved — flipping it now would immediately break CI for that work.
+
+## ruff to zero, gate flipped to blocking — 2026-09-09
+
+The WIP above has since landed (`axon_convert.py`, the Query feature, the Brick-extension work), bringing the committed-tree count to 8 under ruff 0.16.6's default set + `BLE001`/`RUF013`. All 8 resolved:
+
+| Finding | Where | Resolution |
+|---|---|---|
+| `I001` unsorted imports | `derivation_engine.py` | `ruff --fix` |
+| `F401` unused imports (×2) | `tests/test_fault_openapi.py` | `ruff --fix` |
+| `RUF012` mutable class attribute | `axon_convert.py` `_COMPARE_OPS` | `frozenset` — it was only ever read |
+| `DTZ011` naive `date.today()` | `energystar_puller.py` `pull_once` | `datetime.now(timezone.utc).date()` — same UTC clock as the reading's own `time.time()` timestamp; the containers already run in UTC, so no behavior change in the deployed configuration |
+| `S102` `exec()` (×3) | `tests/test_axon_convert.py` | `per-file-ignores` in `ruff.toml` with the reason — the module under test emits Python source, exec'ing it is the test |
+
+| Metric | Before | After |
+|---|---|---|
+| `ruff check src/ tests/` | 8 | **0** |
+| `mypy src/timberdoodle` | 0 | 0 |
+| CI | ruff `continue-on-error: true` | **ruff blocking** — both lint gates are now hard gates, per `PLAN.md` Guardrails ("flip to blocking once the counts actually hit zero, not because the gate was loosened") |
