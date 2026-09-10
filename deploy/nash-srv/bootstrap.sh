@@ -45,6 +45,12 @@ timberdoodle.nash.engineering {
 
 docs.timberdoodle.nash.engineering {
     root * /var/www/timberdoodle-docs
+    # Zudoku's static export writes page.html files, but every internal
+    # link is extension-less (/introduction, /api/fbf, etc.) - a plain
+    # file_server 404s on any of those unless something tries the .html
+    # suffix first. Confirmed live: every page except the literal root
+    # 404'd on a direct load/refresh/shared link before this was added.
+    try_files {path} {path}.html {path}/index.html /index.html
     file_server
 }
 EOF
