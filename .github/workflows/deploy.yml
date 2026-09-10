@@ -1,0 +1,66 @@
+name: Deploy
+
+# Fires only after the CI workflow finishes on main, and only deploys if it
+# passed - a broken build never reaches nash-srv. See
+# docs-site/pages/nash-srv-deploy.mdx for the full setup this depends on
+# (self-hosted runner, deploy wrapper, Caddy, DNS).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, nash-srv, timberdoodle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Deploy exactly the commit CI validated, not just "main" (which
+          # may have moved on again by the time this job starts).
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Deploy stack
+        # The only command this runner user can run as root - see
+        # deploy/nash-srv/setup-runner.sh. Rebuilds/recreates containers and
+        # restarts gateway; postgres-data/oxigraph-data volumes are untouched.
+        run: sudo /usr/local/sbin/timberdoodle-deploy.sh
+
+      - name: Wait for gateway, seed demo account if needed
+        env:
+          DEMO_ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
+          DEMO_ADMIN_PASSWORD: ${{ secrets.DEMO_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          code="000"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/auth/login \
+              -H 'Content-Type: application/json' \
+              -d "{\"email\":\"${DEMO_ADMIN_EMAIL}\",\"password\":\"${DEMO_ADMIN_PASSWORD}\"}")
+            [ "$code" != "000" ] && break
+            sleep 2
+          done
+          if [ "$code" = "000" ]; then
+            echo "gateway never came up" >&2
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            # POST /auth/orgs is not safe to call twice for the same email
+            # (leaves an orphan org row and 500s - see auth.py), so this
+            # only ever runs the very first time the demo account is missing.
+            echo "demo account doesn't exist yet (login returned $code) - creating it"
+            curl -sf -X POST http://127.0.0.1:8080/auth/orgs \
+              -H 'Content-Type: application/json' \
+              -d "{\"name\":\"Demo\",\"admin_email\":\"${DEMO_ADMIN_EMAIL}\",\"admin_password\":\"${DEMO_ADMIN_PASSWORD}\"}"
+          fi
+
+      - name: Build and publish docs
+        run: |
+          cd docs-site
+          npm ci
+          npm run build
+          cp -r dist/. /var/www/timberdoodle-docs/

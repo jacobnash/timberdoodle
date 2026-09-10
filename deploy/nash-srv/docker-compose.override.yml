@@ -1,0 +1,38 @@
+# nash-srv is a shared box running other projects behind one Caddy
+# instance - Caddy is the only thing allowed to listen on 0.0.0.0 there
+# (see docs-site/pages/nash-srv-deploy.mdx). This rebinds every port the
+# base docker-compose.yml publishes to loopback-only, so nothing but
+# `gateway` (fronted by Caddy) is reachable from outside the box. Apply
+# with a second -f, never edit docker-compose.yml itself:
+#   docker compose -f docker-compose.yml -f deploy/nash-srv/docker-compose.override.yml ...
+## Compose appends `ports:` lists across -f files by default instead of
+## replacing them - without `!override` here, both the base file's 0.0.0.0
+## binding and this loopback one would end up published side by side,
+## silently defeating the whole point of this file. `!override` forces a
+## full replace (needs Compose 2.24+; confirmed against 5.3.1 on nash-srv
+## and 5.3.0 here).
+services:
+  mosquitto:
+    ports: !override
+      - "127.0.0.1:1883:1883"
+
+  oxigraph:
+    ports: !override
+      - "127.0.0.1:7878:7878"
+
+  postgres:
+    ports: !override
+      - "127.0.0.1:5433:5432"
+
+  jaeger:
+    ports: !override
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4318:4318"
+
+  grafana:
+    ports: !override
+      - "127.0.0.1:3033:3000"
+
+  gateway:
+    ports: !override
+      - "127.0.0.1:8080:80"

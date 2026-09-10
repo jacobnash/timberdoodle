@@ -1,0 +1,92 @@
+---
+title: Public demo deploy (nash-srv)
+---
+
+Push to `main` and, once [CI](https://github.com/jacobnash/timberdoodle/actions/workflows/ci.yml)
+passes, [`.github/workflows/deploy.yml`](https://github.com/jacobnash/timberdoodle/blob/main/.github/workflows/deploy.yml)
+deploys the whole stack to `nash-srv` - a shared box that also runs a few
+other projects behind one Caddy instance. `https://timberdoodle.nash.engineering`
+is the app, `https://docs.timberdoodle.nash.engineering` is this site
+(rebuilt and republished on every deploy too).
+
+Deploys land via a **self-hosted GitHub Actions runner** on the box, not a
+GitHub-hosted runner SSHing in - no deploy key ever leaves nash-srv. The
+runner runs as a dedicated `github-runner` OS user that is **not** in the
+`docker` group (docker-group membership is root-equivalent host access, and
+this box runs unrelated projects for other people) - it can only touch
+timberdoodle at all via one root-owned, no-argument wrapper script it's
+allowed to `sudo` through a sudoers rule scoped to exactly that script:
+
+```
+github-runner ALL=(root) NOPASSWD: /usr/local/sbin/timberdoodle-deploy.sh
+```
+
+That wrapper does `docker compose -f docker-compose.yml -f
+deploy/nash-srv/docker-compose.override.yml --env-file
+~/.config/timberdoodle/nash-srv.env {pull,up -d --build,restart gateway}` -
+the override file rebinds every port the base compose file publishes
+(`postgres`, `oxigraph`, `mosquitto`, `jaeger`, `grafana`, `gateway`) to
+`127.0.0.1`, matching how every other project on this box is bound. Caddy is
+the only thing listening on `0.0.0.0:80`/`:443`; nothing else is reachable
+from outside the box except SSH. The `restart gateway` step exists because
+gateway caches upstream addresses at its own startup - see the main
+CLAUDE.md gotcha.
+
+`postgres-data`/`oxigraph-data` are named Docker volumes the deploy never
+touches (no `down -v` anywhere in the pipeline), so the demo/e2e data your
+friends generate survives every redeploy.
+
+## One-time setup
+
+1. **DNS** - add CNAMEs (not A records - nash-srv's public IP is dynamic):
+   ```
+   timberdoodle.nash.engineering      CNAME  nash-engineering-qdwgdwmvvt.dynamic-m.com
+   docs.timberdoodle.nash.engineering CNAME  nash-engineering-qdwgdwmvvt.dynamic-m.com
+   ```
+   This is the only step that isn't scripted - it needs your DNS provider's
+   own UI/credentials.
+2. **Everything else on nash-srv** - one script does the rest: generates
+   real prod secrets (`~/.config/timberdoodle/nash-srv.env`, outside the git
+   checkout so `actions/checkout`'s `git clean -ffdx` can't touch it),
+   installs the runner/wrapper/sudoers rule via `setup-runner.sh`, and
+   appends+reloads the Caddy block. All three sub-steps are safe to re-run
+   (each skips itself if already done).
+   ```bash
+   git clone git@github.com:jacobnash/timberdoodle.git   # skip if already cloned
+   cd timberdoodle
+   bash deploy/nash-srv/bootstrap.sh <REGISTRATION_TOKEN>
+   ```
+   Get `<REGISTRATION_TOKEN>` from the repo's Settings → Actions → Runners →
+   New self-hosted runner (valid ~1 hour, single use - grab it right before
+   running). `TIMBERDOODLE_ALLOW_PRIVATE_WEBHOOKS` is deliberately left
+   unset in the generated env file - this box is public, so the webhook
+   SSRF guard (`webhooks.validate_url`) needs to stay on, unlike local dev
+   or CI.
+3. **Demo credentials** - already set as `DEMO_ADMIN_EMAIL`/
+   `DEMO_ADMIN_PASSWORD` GitHub Actions repo secrets (generated once,
+   pushed with `gh secret set`, never committed to the repo). The first
+   deploy creates that account via `POST /auth/orgs`; every deploy after
+   that logs in with it first and only falls back to creating it if login
+   fails (`/auth/orgs` isn't safe to call twice for the same email - see
+   `auth.py`). Those are the credentials to hand to friends - pull them
+   from GitHub's secret UI (write-only, so re-set rather than "view") if
+   you need a reminder, or rotate them there directly.
+
+## Reaching the parts that aren't public
+
+Only the app and its docs are public. Everything else (Postgres, Oxigraph,
+Grafana, Jaeger, MQTT) is bound to `127.0.0.1` on nash-srv - reach it over
+an SSH tunnel, e.g.:
+
+```bash
+ssh -L 3033:127.0.0.1:3033 jacob@nash-srv   # then open http://localhost:3033 for Grafana
+```
+
+## Rotating the demo password
+
+Change `DEMO_ADMIN_PASSWORD` in GitHub Actions secrets, then either wait for
+the next deploy or run one manually (Actions → Deploy → Run workflow) -
+there's no in-app "change password" endpoint to call instead, and the
+deploy step only creates the account, it doesn't reset an existing
+password. If you need it changed immediately, update it directly against
+Postgres on the box instead of waiting on a redeploy.
