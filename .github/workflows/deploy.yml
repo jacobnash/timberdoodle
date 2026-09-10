@@ -23,6 +23,11 @@ jobs:
           # Deploy exactly the commit CI validated, not just "main" (which
           # may have moved on again by the time this job starts).
           ref: ${{ github.event.workflow_run.head_sha }}
+          # fbf/ is a submodule pointing at a separate private repo - the
+          # runner's own SSH config (see deploy/nash-srv/setup-runner.sh)
+          # supplies a read-only deploy key for it, since actions/checkout's
+          # token only covers this repo, not other private repos.
+          submodules: true
 
       - name: Deploy stack
         # The only command this runner user can run as root - see

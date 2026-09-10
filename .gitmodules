@@ -1,0 +1,3 @@
+[submodule "fbf"]
+	path = fbf
+	url = git@github.com:jacobnash/fbf.git

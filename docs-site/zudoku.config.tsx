@@ -111,12 +111,12 @@ const config: ZudokuConfig = {
       categories: [{ label: "Timberdoodle APIs", tags: ["Auth API"] }],
     },
     {
-      // FBF is a separate, independently-versioned sibling project
-      // (../../fbf, not part of this repo) - own category, not lumped
-      // into "Timberdoodle APIs", so that separation stays visible here
-      // too.
+      // FBF is a separate, independently-versioned project, vendored as a
+      // git submodule at fbf/ (still its own repo/history - see
+      // .gitmodules) - own category, not lumped into "Timberdoodle APIs",
+      // so that separation stays visible here too.
       type: "file",
-      input: "../../fbf/openapi.yaml",
+      input: "../fbf/openapi.yaml",
       path: "/api/fbf",
       categories: [{ label: "FBF APIs", tags: ["Discovery, Connections & Devices"] }],
     },
