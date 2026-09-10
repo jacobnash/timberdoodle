@@ -82,6 +82,17 @@ docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_F
 # recreated above without gateway also restarting, its routes 404/502 even
 # though the backend is healthy (see CLAUDE.md's gateway restart gotcha).
 docker compose -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}" --env-file "${ENV_FILE}" restart gateway
+# Block here instead of handing control back to the caller (the deploy
+# workflow) while gateway is mid-restart - otherwise its very next step
+# can race a connection reset. Any HTTP response (even a 4xx from a
+# bogus login body) means it's accepting connections again; \`|| echo 000\`
+# keeps a transient curl failure from tripping this script's own set -e.
+for i in \$(seq 1 30); do
+  code=\$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/auth/login \\
+    -H 'Content-Type: application/json' -d '{}' || echo "000")
+  [ "\$code" != "000" ] && break
+  sleep 1
+done
 EOF
 chown root:root "$WRAPPER"
 chmod 755 "$WRAPPER"

@@ -30,24 +30,18 @@ jobs:
         # restarts gateway; postgres-data/oxigraph-data volumes are untouched.
         run: sudo /usr/local/sbin/timberdoodle-deploy.sh
 
-      - name: Wait for gateway, seed demo account if needed
+      - name: Seed demo account if needed
+        # Deploy stack (above) already blocks until gateway responds again
+        # after its post-restart - nothing left to race here, just a
+        # single login check.
         env:
           DEMO_ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
           DEMO_ADMIN_PASSWORD: ${{ secrets.DEMO_ADMIN_PASSWORD }}
         run: |
           set -euo pipefail
-          code="000"
-          for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/auth/login \
-              -H 'Content-Type: application/json' \
-              -d "{\"email\":\"${DEMO_ADMIN_EMAIL}\",\"password\":\"${DEMO_ADMIN_PASSWORD}\"}")
-            [ "$code" != "000" ] && break
-            sleep 2
-          done
-          if [ "$code" = "000" ]; then
-            echo "gateway never came up" >&2
-            exit 1
-          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/auth/login \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"${DEMO_ADMIN_EMAIL}\",\"password\":\"${DEMO_ADMIN_PASSWORD}\"}")
           if [ "$code" != "200" ]; then
             # POST /auth/orgs is not safe to call twice for the same email
             # (leaves an orphan org row and 500s - see auth.py), so this
