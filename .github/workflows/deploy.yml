@@ -9,20 +9,26 @@ on:
     workflows: ["CI"]
     types: [completed]
     branches: [main]
+  # Manual redeploy (Actions -> Deploy -> Run workflow) - e.g. after
+  # re-running setup-runner.sh on the box to pick up a wrapper change,
+  # without needing a throwaway commit just to trigger a fresh run.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, nash-srv, timberdoodle]
     steps:
       - uses: actions/checkout@v4
         with:
           # Deploy exactly the commit CI validated, not just "main" (which
-          # may have moved on again by the time this job starts).
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # may have moved on again by the time this job starts) - falls
+          # back to the dispatch event's own sha when triggered manually
+          # (workflow_run.head_sha doesn't exist on that event).
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           # fbf/ is a submodule pointing at a separate private repo, cloned
           # in its own step below instead of via submodules: true here.
           # checkout temporarily sets a *global* git url.insteadOf rule
