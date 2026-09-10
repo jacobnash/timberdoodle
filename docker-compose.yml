@@ -135,6 +135,13 @@ services:
   fault_api:
     build: .
     command: python -m timberdoodle.fault_api
+    # Unlike the other HTTP APIs, this one calls connect_pool() eagerly in
+    # main() before serving - same DB-not-ready-yet startup race as the
+    # pure daemons below (see mqtt_listener), just via an HTTP API. Seen
+    # live in CI twice: fault_api exits on a fresh volume's first-boot
+    # restart, and gateway's depends_on: service_healthy then fails the
+    # whole stack since nothing brings it back.
+    restart: unless-stopped
     environment: *daemon-env
     extra_hosts: *host-gateway
     volumes:
