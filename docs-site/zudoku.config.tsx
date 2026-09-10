@@ -121,6 +121,21 @@ const config: ZudokuConfig = {
       categories: [{ label: "FBF APIs", tags: ["Discovery, Connections & Devices"] }],
     },
   ],
+  // Zudoku already prerenders every page to static HTML with real content
+  // in the initial response (not client-side-only) and already emits a
+  // .md twin per page by default - this just turns on the two llms.txt
+  // outputs (off by default) and the sitemap, all built from the same
+  // docs source at build time so they can't drift from the real pages.
+  docs: {
+    publishMarkdown: true,
+    llms: {
+      llmsTxt: true,
+      llmsTxtFull: true,
+    },
+  },
+  sitemap: {
+    siteUrl: "https://docs.timberdoodle.nash.engineering",
+  },
 };
 
 export default config;

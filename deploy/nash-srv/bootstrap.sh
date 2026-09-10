@@ -45,6 +45,14 @@ timberdoodle.nash.engineering {
 
 docs.timberdoodle.nash.engineering {
     root * /var/www/timberdoodle-docs
+    # dist/index.html is a client-side-only redirect (a bare
+    # <script>window.location.href="/introduction"</script>, 200 OK,
+    # zero real content) - Zudoku's `redirects` config always emits this
+    # shape, there's no server-redirect mode. A crawler/fetch tool that
+    # doesn't run JS gets nothing at the site root otherwise. A real
+    # server-side redirect here takes priority and makes / work with zero
+    # JS, same pattern as the main app's / -> /ui/ redirect in nginx.conf.
+    redir / /introduction 301
     # Zudoku's static export writes page.html files, but every internal
     # link is extension-less (/introduction, /api/fbf, etc.) - a plain
     # file_server 404s on any of those unless something tries the .html
