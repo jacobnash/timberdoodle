@@ -26,7 +26,7 @@ networks:
 services:
   fbf_mock_device:
     build:
-      context: ../../fbf
+      context: fbf
       dockerfile: ../deploy/nash-srv/fbf.Dockerfile
     command: python -m fbf.mock_device --address 172.30.0.10/24:47808 --instance 3456 --site-spec /app/hospital_site_spec.json
     networks:
@@ -36,7 +36,7 @@ services:
 
   fbf_api:
     build:
-      context: ../../fbf
+      context: fbf
       dockerfile: ../deploy/nash-srv/fbf.Dockerfile
     command: >
       python -m fbf.api
