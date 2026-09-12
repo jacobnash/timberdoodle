@@ -579,38 +579,41 @@ components:
         kind:
           type: string
           enum: [confirm_mapping, correct_mapping, reject_mapping, correct_type, confirm_topology, naming_alias, resolve_deviation, accept_spec_entry, correct_spec_entry]
-        spec_tag: { type: string }
-        field_id: { type: string }
-        entity_id: { type: string }
-        canonical_type: { type: string }
+        id: { type: string, readOnly: true }
+        spec_tag: { type: ["string", "null"] }
+        field_id: { type: ["string", "null"] }
+        entity_id: { type: ["string", "null"] }
+        canonical_type: { type: ["string", "null"] }
         deviation_id: { type: string }
         relationship:
-          type: object
+          type: ["object", "null"]
           description: 'For confirm_topology - {"kind": "feeds", "from": tag, "to": tag}'
         alias:
-          type: object
+          type: ["object", "null"]
           description: 'For naming_alias - {"field_token": "AH", "spec_token": "AHU"}'
         fields:
           type: object
           description: For correct_spec_entry - the spec row fields to overwrite
-        note: { type: string }
-        use_graph: { type: boolean, default: true }
+        note: { type: ["string", "null"] }
+        by: { type: string, readOnly: true, description: Who posted it (X-User from the gateway) }
+        at: { type: string, format: date-time, readOnly: true }
+        use_graph: { type: boolean, default: true, writeOnly: true }
     FieldCapture:
       type: object
       properties:
         id: { type: string }
         captured_at: { type: string, format: date-time }
-        engineer: { type: string }
+        engineer: { type: ["string", "null"] }
         location:
-          type: object
+          type: ["object", "null"]
           properties:
             building: { type: string }
             floor: { type: string }
             room: { type: string }
             description: { type: string }
-        punch_item_id: { type: string }
-        note: { type: string }
-        photo_ref: { type: string }
+        punch_item_id: { type: ["string", "null"] }
+        note: { type: ["string", "null"] }
+        photo_ref: { type: ["string", "null"] }
         legible:
           type: object
           description: >-
@@ -627,14 +630,14 @@ components:
       type: object
       required: [description]
       properties:
-        id: { type: string }
-        entity_id: { type: string }
-        field_id: { type: string }
-        spec_tag: { type: string }
+        id: { type: string, readOnly: true }
+        entity_id: { type: ["string", "null"] }
+        field_id: { type: ["string", "null"] }
+        spec_tag: { type: ["string", "null"], description: At least one of entity_id / field_id / spec_tag must name what the risk covers }
         description: { type: string }
-        accepted_by: { type: string }
-        accepted_at: { type: string, format: date-time }
-        review_by: { type: string, format: date }
+        accepted_by: { type: string, description: Defaults to X-User }
+        accepted_at: { type: string, format: date-time, readOnly: true }
+        review_by: { type: string, format: date, description: Defaults to 90 days out - a risk is never accepted without a review date }
     Report:
       type: object
       description: >

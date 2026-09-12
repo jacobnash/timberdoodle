@@ -95,11 +95,11 @@ def project_brick(entities: list[Entity], vocab: brick_vocab.Vocab | None = None
 
     for e in entities:
         label = e.get("spec_tag") or (e.get("field_identity") or {}).get("name") or e["id"]
-        if e.get("confidence") not in PROJECTED_CONFIDENCE and not include_unsettled:
-            res.skipped.append(f"{label}: identity is {e.get('confidence')} - not projected; Brick cannot carry 'probably'. Confirm or correct the mapping first")
-            continue
         if not e.get("field_identity") and (e.get("liveness") or {}).get("state") != "not_networked":
             res.skipped.append(f"{label}: not observed in the field - kept as an expected entity in the canonical model only")
+            continue
+        if e.get("confidence") not in PROJECTED_CONFIDENCE and not include_unsettled:
+            res.skipped.append(f"{label}: identity is {e.get('confidence')} - not projected; Brick cannot carry 'probably'. Confirm or correct the mapping first")
             continue
         uri = equip_uri(e)
         res.projected_entities.append(e["id"])

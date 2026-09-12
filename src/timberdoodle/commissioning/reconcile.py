@@ -86,8 +86,13 @@ def _signature_diff(prior: Entity, current: Entity) -> dict:
     def keyed(e: Entity) -> dict[str, dict]:
         return {f"{p.get('bacnet_object') or p.get('name')}": p for p in e.get("points", []) if p.get("status") in ("matched", "unspecified_present", "unreadable")}
     a, b = keyed(prior), keyed(current)
-    added = [f"{k} ({b[k].get('function') or 'unreadable'} {b[k].get('role') or ''})".strip() for k in b if k not in a]
-    removed = [f"{k} ({a[k].get('function') or 'unreadable'} {a[k].get('role') or ''})".strip() for k in a if k not in b]
+
+    def describe(k: str, p: dict) -> str:
+        name = f" '{p['name']}'" if p.get("name") and p["name"] != k else ""
+        return f"{k}{name} ({p.get('function') or 'unreadable'} {p.get('role') or ''})".strip()
+
+    added = [describe(k, b[k]) for k in b if k not in a]
+    removed = [describe(k, a[k]) for k in a if k not in b]
     changed = []
     for k in a.keys() & b.keys():
         for fld in ("name", "function", "role", "units"):

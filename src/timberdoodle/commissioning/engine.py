@@ -267,6 +267,8 @@ def run_pass(repo: Repo, project_id: str, store=None, history: History | None = 
     for e in result.entities:
         if e.get("field_identity") and history is not None:
             e["ladder"] = ladder.climb(e, history, now=now, config=st.project.get("settings", {}).get("ladder"))
+        elif e.get("field_identity"):
+            e["ladder"] = {"highest_rung_passed": 0, "rungs": [{"rung": 1, "name": ladder.RUNG_NAMES[1], "result": "insufficient_data", "evidence": ["device is bound but no point-history source is configured for this pass - existence cannot be judged from the device record alone"], "symptom": None, "candidates": [], "fell_to_rung": None, "checked_at": now.isoformat()}]}
         elif (e.get("liveness") or {}).get("state") == "not_networked":
             e["ladder"] = {"highest_rung_passed": 0, "rungs": [{"rung": 1, "name": ladder.RUNG_NAMES[1], "result": "not_applicable", "evidence": ["not networked by design - verification is a nameplate photo, not a rung"], "symptom": None, "candidates": [], "fell_to_rung": None, "checked_at": now.isoformat()}]}
         else:
@@ -337,14 +339,16 @@ def apply_correction(repo: Repo, project_id: str, correction: dict, by: str, sto
         raise ValueError(f"unknown correction kind {kind!r}")
     before = {e["id"]: e for e in repo.list_docs("cx_entities", project_id)}
     corr: Correction = {"id": new_id("corr"), "kind": kind, "spec_tag": correction.get("spec_tag"), "field_id": correction.get("field_id"), "entity_id": correction.get("entity_id"), "canonical_type": correction.get("canonical_type"), "relationship": correction.get("relationship"), "alias": correction.get("alias"), "by": by, "at": now.isoformat(), "note": correction.get("note")}  # type: ignore[typeddict-item]
-    repo.upsert("cx_corrections", project_id, corr, now)  # type: ignore[arg-type]
 
-    if kind == "resolve_deviation" and correction.get("deviation_id"):
+    if kind == "resolve_deviation":
+        if not correction.get("deviation_id"):
+            raise ValueError("resolve_deviation needs deviation_id")
         d = repo.get("cx_deviations", project_id, correction["deviation_id"])
         if d is None:
             raise KeyError(f"deviation {correction['deviation_id']!r} not found")
         d.update({"status": "resolved", "resolved_at": now.isoformat(), "resolved_by": by, "resolution": correction.get("note") or "resolved by a person"})
         repo.upsert("cx_deviations", project_id, d, now)
+    repo.upsert("cx_corrections", project_id, corr, now)  # type: ignore[arg-type]
     if kind == "correct_spec_entry" and correction.get("spec_tag"):
         row = repo.get("cx_spec", project_id, "spec") or {"id": "spec", "material": {}, "model": None}
         material = row.get("material") or {}
