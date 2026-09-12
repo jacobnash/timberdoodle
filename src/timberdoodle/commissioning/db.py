@@ -44,8 +44,17 @@ CREATE INDEX IF NOT EXISTS {t}_project_idx ON {t} (project_id, updated_at DESC);
 )
 
 
+# Arbitrary constant; the api and the reconciler both call ensure_schema at
+# startup and Postgres's CREATE TABLE IF NOT EXISTS is not race-free
+# (two concurrent creators of the same brand-new table can collide on the
+# pg_type unique index). The advisory lock makes one wait for the other.
+_SCHEMA_LOCK_KEY = 726_400_101
+
+
 def ensure_schema(conn: psycopg.Connection) -> None:
-    conn.execute(SCHEMA)
+    with conn.transaction():
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
+        conn.execute(SCHEMA)
 
 
 def _dump(doc) -> str:
