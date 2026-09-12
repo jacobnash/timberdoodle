@@ -65,10 +65,13 @@ CI/dev loop. `docker compose restart gateway` always fixes it.
 | `derivation_engine` | Evaluates derivations on a sweep and, for cur-mode ones, on matching MQTT messages; writes results back into Oxigraph + Postgres. | — |
 | `validate_api` | `POST /validate` — checks the live entity graph against Brick's own SHACL shapes (`pip install -e ".[validate]"`). | 8005 |
 | `auth_api` | Identity: `POST /login`, API-key issuance/revocation, org/site directory CRUD. See "Gateway auth" below. | 8006 |
+| `commissioning_api` | Spec-grounded discovery, commissioning and verification: projects, spec material, pushed device data, passes, corrections, field captures, accepted risks, Brick/Haystack projections. See [docs-site/pages/commissioning.mdx](docs-site/pages/commissioning.mdx). | 8008 |
+| `commissioning_reconciler` | Re-runs a commissioning pass for every project on a schedule (`COMMISSIONING_PASS_INTERVAL`, default 900 s) so liveness/drift/absence keep up with the building. | — |
 
-None of the 5 HTTP APIs are exposed on the host directly — go through
+None of the 6 HTTP APIs are exposed on the host directly — go through
 the gateway at `localhost:8080` instead, prefixed by API name
-(`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`, `/auth/*`). The
+(`/ingest/*`, `/fault/*`, `/derivation/*`, `/validate/*`, `/auth/*`,
+`/commissioning/*`). The
 demo browser UI (`ui/`) is served straight off the gateway at
 [`localhost:8080/ui/`](http://localhost:8080/ui/) — no separate
 `ui_server.py` needed for this path.
@@ -222,7 +225,7 @@ human to review and promote - it never edits the live rule set itself.
 
 Postgres is remapped to host port 5433, not the default 5432, to avoid
 colliding with a locally-running Postgres instance. `ingest_api`/`fault_api`/
-`derivation_api`/`validate_api` don't publish host ports at all anymore —
+`derivation_api`/`validate_api`/`commissioning_api` don't publish host ports at all anymore —
 reach them through the gateway on 8080.
 
 ## Haystack pull (optional)

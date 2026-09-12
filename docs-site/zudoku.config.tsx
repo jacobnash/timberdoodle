@@ -57,7 +57,7 @@ const config: ZudokuConfig = {
       type: "category",
       label: "Documentation",
       icon: "book",
-      items: ["/introduction", "/architecture", "/multi-site", "/gateway-auth", "/his-query", "/fault-detection", "/derivation", "/webhooks", "/validate", "/haxall-drop-in", "/haystack-puller", "/adding-a-data-source", "/weather-stations", "/backups", "/nash-srv-deploy", "/fbf", "/fbf-adding-a-new-source", "/fbf-periodic-discovery"],
+      items: ["/introduction", "/architecture", "/multi-site", "/gateway-auth", "/his-query", "/fault-detection", "/derivation", "/webhooks", "/validate", "/commissioning", "/haxall-drop-in", "/haystack-puller", "/adding-a-data-source", "/weather-stations", "/backups", "/nash-srv-deploy", "/fbf", "/fbf-adding-a-new-source", "/fbf-periodic-discovery"],
     },
     {
       type: "category",
@@ -69,6 +69,7 @@ const config: ZudokuConfig = {
         { type: "link", label: "Fault API", to: "/api/fault" },
         { type: "link", label: "Derivation API", to: "/api/derivation" },
         { type: "link", label: "Validate API", to: "/api/validate" },
+        { type: "link", label: "Commissioning API", to: "/api/commissioning" },
         { type: "link", label: "Auth API", to: "/api/auth" },
         { type: "link", label: "FBF API (BACnet/Modbus)", to: "/api/fbf" },
       ],
@@ -103,6 +104,12 @@ const config: ZudokuConfig = {
       input: "../validate-api-openapi.yaml",
       path: "/api/validate",
       categories: [{ label: "Timberdoodle APIs", tags: ["Validate API"] }],
+    },
+    {
+      type: "file",
+      input: "../commissioning-api-openapi.yaml",
+      path: "/api/commissioning",
+      categories: [{ label: "Timberdoodle APIs", tags: ["Commissioning API"] }],
     },
     {
       type: "file",

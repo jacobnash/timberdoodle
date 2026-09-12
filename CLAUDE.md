@@ -56,6 +56,27 @@ integrations). This file is gotchas only — don't duplicate those.
   (`ontology/`, `shacl_validate.py`, `validate_api.py` on port 8005) — the
   doc itself wasn't deleted (kept as design rationale), don't treat its
   "planned, not started" status line as current.
+- **Commissioning agent (`src/timberdoodle/commissioning/`, port 8008,
+ `/commissioning/`)** — design + API walkthrough in
+ `docs-site/pages/commissioning.mdx`; gotchas only here:
+ `commissioning_api` and `commissioning_reconciler` both run
+ `db.ensure_schema` at startup and Postgres's `CREATE TABLE IF NOT
+ EXISTS` races on `pg_type_typname_nsp_index` when two processes do it
+ at once — the DDL is wrapped in `pg_advisory_xact_lock`, don't remove
+ it. A pushed device row with a `topic_prefix` gets
+ `urn:equip:<topic_prefix>` as its `field_id` (not `bacnet:<inst>@<addr>`)
+ so it merges with graph discovery — corrections/risks must use that id.
+ Faults are mirrored into the shared `faults` table with `point_uri =
+ cx:<project_id>:<entity_id>` under rule ids
+ `commissioning:sustained-absence` / `commissioning:ladder-failure` —
+ anything that lists `faults` by point will see those rows.
+ `History.window()` is half-open on the end (matches
+ `timeseries.read_range_many`); the ladder passes `now + 1s` so a sample
+ stamped exactly "now" counts. `tests/test_commissioning_integration.py`
+ needs `MQTT_USERNAME`/`MQTT_PASSWORD` in the environment (like
+ `test_e2e_journey.py`) and, if you `source .env`, blank
+ `TIMBERDOODLE_PG_DSN=`/`OXIGRAPH_URL=` lines will override the
+ localhost defaults with empty strings — unset them.
 - **`gateway/njs/*.js` are ES modules regardless of file extension** —
   njs always treats them as modules. Plain `node` needs
   `gateway/njs/package.json`'s `"type": "module"` to agree, or

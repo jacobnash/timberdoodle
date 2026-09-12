@@ -1,0 +1,211 @@
+---
+title: Commissioning agent
+---
+
+The commissioning agent (`src/timberdoodle/commissioning/`) answers one
+question for a building: **does what the drawings say match what the
+network shows, and how sure are we?** It takes the spec (schedules,
+sequences, point lists), the devices the connector has already landed in
+Oxigraph and `point_history`, and whatever a person in the field can
+photograph, and produces a machine-parseable report: which spec tag is
+which controller and why, how far up the verification ladder each unit
+has climbed, where the spec and the field disagree, what is a fault and
+what is a risk someone has signed for, and a route-ordered list of what
+to go and look at next.
+
+It is served by `commissioning_api` (port 8008, proxied at
+[`/commissioning/`](/api/commissioning)) and re-run on a schedule by
+`commissioning_reconciler` (`COMMISSIONING_PASS_INTERVAL`, default 900 s).
+Both start with plain `docker compose up -d`.
+
+## The canonical model is not Brick
+
+Everything the agent knows is stored as plain-English, ontology-neutral
+documents (`model.py`: `Entity`, `Deviation`, `Correction`,
+`FieldCapture`, `AcceptedRisk`, ...) in JSONB tables named `cx_*` in the
+same Postgres the rest of the stack uses. An entity says `canonical_type:
+"air handling unit"`, `points: [{function: "supply air temperature",
+role: "sensor", ...}]`, `confidence: "high"`, and carries its
+`confidence_basis`, `alternatives`, `ladder`, `liveness` and provenance.
+
+Brick and Haystack are **projections** of that model (`projection.py`),
+generated on demand (`GET .../projection?format=brick|haystack`) and
+written to the graph only when asked (`POST .../projection`), through
+the same `store.add_many` every other writer uses. Equipment URIs reuse
+the ingest layer's `urn:equip:<topic_prefix>` so the projection enriches
+the node `mqtt_listener`/`ingest_equip_tags` already created rather than
+minting a parallel one. Only `confirmed`/`high` identities are projected
+by default - Brick has no way to say "probably this AHU" - and anything
+neither vocabulary can express (confidence, alternatives, ladder
+results, an expected-but-missing point) is listed under `lossy`/`skipped`
+in the response instead of being approximated. The graph is never read
+back as the source of truth for the commissioning model.
+
+## Inputs
+
+```bash
+# 1. a project - state the phase if you know it
+curl -X POST localhost:8080/commissioning/projects \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name": "Building 12", "phase": "warranty", "cidr_scopes": ["10.20.0.0/24"]}'
+
+# 2. extracted spec material (schedules -> equipment rows with tags, types, points, locations, sources)
+curl -X POST localhost:8080/commissioning/projects/$PID/spec \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d @spec-material.json
+
+# 3. (optional) device rows in FBF's own GET /devices + POST /learn shape, for what the graph doesn't carry
+curl -X POST localhost:8080/commissioning/projects/$PID/devices \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"devices": [{"id": "bacnet:7001@10.20.0.71", "device_instance": 7001, "address": "10.20.0.71", "vendor_id": 8, "name": "AHU_7", "topic_prefix": "fbf/site/AHU_7", "learned": [...]}]}'
+
+# 4. run a pass
+curl -X POST localhost:8080/commissioning/projects/$PID/passes \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{}'
+```
+
+Devices the connector has already landed in Oxigraph (anything with
+`brick:hasPoint`, plus unlinked `td:sourceTopic` point groups) are
+discovered automatically on every pass (`discovery.discover_from_store`);
+pushed rows merge with them by `topic_prefix`. A pushed row with a
+`topic_prefix` therefore takes `urn:equip:<topic_prefix>` as its field
+id, not `bacnet:<instance>@<address>`.
+
+**The phase matters and is always stated.** Absence means the opposite
+thing in new construction ("not installed yet - progress data") and in
+operations ("was here, now isn't - an outage"). If you don't set
+`phase`, the agent infers one from the data and puts `ASSUMED <phase>:
+...` in every report's `assumptions` and `pass.phase_rationale` until you
+state it (`POST .../phase`).
+
+**`cidr_scopes` is a claim about what was scanned, not about the
+building.** A spec device that is not on the network is reported as
+`spec_device_not_found` with the phase's reading of it; it is never
+reported as nonexistent.
+
+## What a pass does
+
+`engine.run_pass` is deterministic given the same inputs, which is what
+lets a correction re-run the whole building and report exactly what
+moved:
+
+1. **Spec model** (`spec_model.py`) - equipment rows normalized, types
+   mapped to the canonical vocabulary (or inferred from the tag and
+   flagged), point names classified into function + role, internal
+   inconsistencies (duplicate tags, one-sided topology, unit
+   contradictions) **flagged, not reconciled**. Entries below the
+   extraction-confidence threshold become one-action questions.
+2. **Alignment** (`alignment.py`) - every spec entry against every
+   device on an evidence ladder: tag match with delimiter/abbreviation
+   variation, point-signature fit for the type, unit/range plausibility,
+   topology, vendor naming convention. Result per entity:
+   `confirmed` (a person said so or a nameplate+address capture shows
+   it), `high` (auto-accepted), `medium`/`low` (a question, with named
+   alternatives - "if not VAV-1-02 then V1_3 is most likely VAV-1-03"),
+   or `unmatched`. A candidate whose own name carries a *different*
+   number than the spec tag is scored down for it, not up for the letters.
+3. **Verification ladder** (`ladder.py`) - four rungs, climbed in
+   order, stopping at the first failure:
+   existence (has it reported in the window), liveness (do sensors
+   move), responsiveness (do status follow command, sensors track
+   setpoints), command response (did a sensor move after a setpoint
+   change). Rung 4 is **passive**: it uses naturally occurring setpoint
+   changes as the stimulus; `plan_command_tests` describes what an active
+   test *would* write but nothing here writes to a controller. A rung-3
+   or rung-4 failure whose sensor turns out to be flat is reported as
+   the rung-2 fault it really is (`fell_to_rung: 2`). Every failure
+   names the certain symptom and lists candidate causes each with what
+   would distinguish it - never a diagnosis.
+4. **Reconciliation** (`reconcile.py`) - each entity against its prior
+   self: `unchanged`, `new`, `drifted` (object list changed - the diff is
+   reported in full), `re_addressed` (same signature, new address),
+   `missing` (not seen this pass - held for two passes and 12 h before
+   it becomes `absent`; a reboot during a scan looks exactly like
+   this), `absent`, `returned` (compared by signature - the same address
+   answering with a different object list is new hardware, and says so).
+   Nothing is dropped on a miss.
+5. **Faults vs. accepted risks** - a sustained absence (48 h) or a
+   rung-2/3 failure on a `confirmed`/`high` entity is a fault. A symptom
+   on an entity whose identity is unsettled is a deviation to settle
+   first, not a fault. A fault covered by an accepted risk
+   (`POST .../risks`) is reported under `accepted_risks.covered_this_pass`
+   with the risk's owner and review date, never in `faults`; the two
+   lists are never merged. Faults are also mirrored into the shared
+   `faults` table under rule ids `commissioning:sustained-absence` /
+   `commissioning:ladder-failure` with `point_uri = cx:<project>:<entity>`,
+   so the alarm console and webhooks see them.
+6. **Deviations** (`spec_device_not_found`, `field_device_not_in_spec`,
+   `type_mismatch`, `point_mismatch`, `duplicate_claim`,
+   `topology_mismatch`) each carry `spec_says` / `field_shows` /
+   `interpretation` / `to_settle`. Ids and open dates are stable across
+   passes; one the field no longer shows is closed `resolved_by:
+   "evidence"`; one a person resolved is not reopened by the same
+   evidence.
+7. **Punch list** (`punchlist.py`) - every open question becomes an
+   item with `where` / `what_to_find` / `what_to_capture` /
+   `what_would_resolve`, ordered by route (floor, room, then by how many
+   other entities the answer unblocks) and grouped by location in
+   `field_list`.
+8. **Escalations** - `unresolved_questions` are one-action: each carries
+   `accept` / `correct` / `reject` bodies you can POST straight back to
+   `.../corrections`.
+
+## Corrections propagate
+
+```bash
+curl -X POST localhost:8080/commissioning/projects/$PID/corrections \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"kind": "confirm_mapping", "spec_tag": "VAV-1-02", "field_id": "urn:equip:fbf/site/V1_3"}'
+```
+
+A correction (`confirm_mapping`, `correct_mapping`, `reject_mapping`,
+`correct_type`, `confirm_topology`, `naming_alias`, `resolve_deviation`,
+`accept_spec_entry`, `correct_spec_entry`) is recorded with the
+gateway's `X-User` as its author, the whole building is re-scored, and
+the response's `confidence_movement` lists every entity whose confidence
+or binding changed and why - a confirmed `V1_1 = VAV-1-01` teaches the
+`V = VAV` abbreviation, which can lift the other boxes. Rejected
+corrections (unknown kind, unknown deviation id) are not recorded.
+
+## Field captures
+
+```bash
+curl -X POST localhost:8080/commissioning/projects/$PID/captures \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"location": {"floor": "B", "room": "Chiller room"},
+       "legible": {"nameplate": {"tag": "CH-1", "model": "YVAA0195"}, "address": "10.0.0.4?"},
+       "unreadable": ["serial - label scratched"]}'
+```
+
+Only what could actually be read goes in `legible`; a value containing
+`?` is stored under `partial` and never completed by guessing; a capture
+with nothing legible is kept as `unreadable` (it still proves someone
+stood there). Consecutive captures at one location within 20 minutes are
+one device (`group_id`) and their legible fields are combined. A capture
+no punch item asked for is kept as `unprompted` and matched to entities
+by whatever it shows. A capture closes a punch item only if it shows
+what the item asked for.
+
+## Freshness
+
+`GET .../freshness` and every report's `freshness.statement` say what was
+actually observed: "as of 2026-09-12 02:37 UTC: 1 of 2 networked entities
+fresh (a sample within 60 min), 0 stale, 0 missing (grace period), 0
+known absent, 1 never seen; 1 not networked by design" - never "all
+good" when what is meant is "nothing new came in".
+
+## Gateway policy
+
+Rows in `gateway/njs/policy.js`: every `GET` under `/commissioning/`
+needs `viewer`; every `POST` (spec, devices, passes, corrections,
+captures, risks, projection, phase) needs `operator`; `DELETE
+/commissioning/projects/{id}` needs `admin`. `/commissioning/openapi.yaml`
+and `/commissioning/docs` are public like every other API's.
+
+## Running without Postgres
+
+`db.MemoryRepo` has the same surface as `db.PgRepo`; `engine.run_pass`
+takes any `History` (`history.InMemoryHistory` for tests,
+`PostgresHistory` in production). With `MemoryRepo`, `fault_sync.note`
+says faults were not mirrored. `tests/test_commissioning_openapi.py`
+runs the real HTTP handler this way with no services at all.

@@ -13,10 +13,24 @@ info:
     /openapi.yaml and /docs requires a gateway-forwarded JWT; the gateway's
     X-User header is recorded as the author of corrections, captures and
     risks.
+servers:
+  - url: http://localhost:8080/commissioning
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path. Every route is JWT-verified in nginx itself (gateway/njs/) -
+      see README's "Gateway auth" section for how to get a token.
+  - url: http://localhost:8008
+    description: >-
+      Direct - only reachable bare-metal or from inside the Docker
+      network; docker-compose.yml does not publish this port.
+tags:
+  - name: Commissioning API
+    description: Projects, spec material, device data, passes, corrections, captures, risks, projections.
 paths:
   /vocabulary:
     get:
       operationId: getVocabulary
+      tags: [Commissioning API]
       summary: Canonical equipment types, point roles, correction kinds, confidence levels
       responses:
         "200":
@@ -27,6 +41,7 @@ paths:
   /projects:
     get:
       operationId: listProjects
+      tags: [Commissioning API]
       summary: All commissioning projects
       responses:
         "200":
@@ -38,6 +53,7 @@ paths:
                 items: { $ref: "#/components/schemas/Project" }
     post:
       operationId: createProject
+      tags: [Commissioning API]
       summary: Create a project (one building / one engagement)
       requestBody:
         required: true
@@ -69,6 +85,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: getProject
+      tags: [Commissioning API]
       summary: Project with its last pass metadata
       responses:
         "200":
@@ -79,6 +96,7 @@ paths:
         "404": { description: Unknown project }
     delete:
       operationId: deleteProject
+      tags: [Commissioning API]
       summary: Delete a project and everything stored for it
       responses:
         "204": { description: Deleted }
@@ -88,6 +106,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     post:
       operationId: setPhase
+      tags: [Commissioning API]
       summary: State (or un-state) the engagement phase and CIDR scopes
       requestBody:
         required: true
@@ -115,6 +134,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: getSpec
+      tags: [Commissioning API]
       summary: Spec material as supplied and the spec model built from it
       responses:
         "200":
@@ -124,6 +144,7 @@ paths:
               schema: { type: object }
     post:
       operationId: putSpec
+      tags: [Commissioning API]
       summary: Supply spec material (equipment schedule, point list, drawings extractions)
       description: >
         Replaces the project's spec material and rebuilds the spec model
@@ -146,6 +167,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listDevices
+      tags: [Commissioning API]
       summary: Device data pushed for this project
       responses:
         "200":
@@ -155,6 +177,7 @@ paths:
               schema: { type: array, items: { type: object } }
     post:
       operationId: pushDevices
+      tags: [Commissioning API]
       summary: Push discovered device data (FBF GET /devices rows, optionally with learned objects)
       description: >
         Rows in FBF's own shape - {id, protocol, device_instance, address,
@@ -185,6 +208,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listPasses
+      tags: [Commissioning API]
       summary: Recent passes (metadata and summary only)
       parameters:
         - in: query
@@ -198,6 +222,7 @@ paths:
               schema: { type: array, items: { type: object } }
     post:
       operationId: runPass
+      tags: [Commissioning API]
       summary: Run one full pass now and return the report
       requestBody:
         content:
@@ -225,6 +250,7 @@ paths:
       - $ref: "#/components/parameters/id"
     get:
       operationId: getPass
+      tags: [Commissioning API]
       summary: One stored pass report
       responses:
         "200":
@@ -238,6 +264,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: latestReport
+      tags: [Commissioning API]
       summary: The latest pass report
       responses:
         "200":
@@ -250,6 +277,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listEntities
+      tags: [Commissioning API]
       summary: Canonical-model entities from the latest pass
       parameters:
         - in: query
@@ -269,6 +297,7 @@ paths:
       - $ref: "#/components/parameters/id"
     get:
       operationId: getEntity
+      tags: [Commissioning API]
       summary: One entity with its open deviation records
       responses:
         "200":
@@ -282,6 +311,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listDeviations
+      tags: [Commissioning API]
       summary: Deviations (spec vs field), open by default
       parameters:
         - in: query
@@ -300,6 +330,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listQuestions
+      tags: [Commissioning API]
       summary: Batched one-action escalations (accept / correct / reject bodies ready to POST as corrections)
       responses:
         "200":
@@ -312,6 +343,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listCorrections
+      tags: [Commissioning API]
       summary: Corrections recorded so far
       responses:
         "200":
@@ -321,6 +353,7 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/Correction" } }
     post:
       operationId: postCorrection
+      tags: [Commissioning API]
       summary: Record a correction, re-score the whole building, report what moved
       requestBody:
         required: true
@@ -339,6 +372,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: getPunchlist
+      tags: [Commissioning API]
       summary: Field verification list, ordered by route and grouped by location
       parameters:
         - in: query
@@ -355,6 +389,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listCaptures
+      tags: [Commissioning API]
       summary: Field captures ingested so far (including unreadable and unprompted ones)
       responses:
         "200":
@@ -364,6 +399,7 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/FieldCapture" } }
     post:
       operationId: postCapture
+      tags: [Commissioning API]
       summary: Ingest one field capture
       description: >
         Only what a person (or an upstream vision step) could actually
@@ -388,6 +424,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: listRisks
+      tags: [Commissioning API]
       summary: Accepted risks (kept strictly separate from faults)
       responses:
         "200":
@@ -397,6 +434,7 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/AcceptedRisk" } }
     post:
       operationId: postRisk
+      tags: [Commissioning API]
       summary: Accept a risk on an entity - would-be faults on it are reported under the risk, not as faults
       requestBody:
         required: true
@@ -415,6 +453,7 @@ paths:
       - $ref: "#/components/parameters/id"
     delete:
       operationId: deleteRisk
+      tags: [Commissioning API]
       summary: Withdraw an accepted risk
       responses:
         "204": { description: Deleted }
@@ -424,6 +463,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: getFreshness
+      tags: [Commissioning API]
       summary: Honest freshness - fresh / stale / missing / known absent / never seen, as of now
       responses:
         "200":
@@ -436,6 +476,7 @@ paths:
       - $ref: "#/components/parameters/projectId"
     get:
       operationId: getProjection
+      tags: [Commissioning API]
       summary: Brick triples or Haystack records projected from settled entities, with what was lost
       parameters:
         - in: query
@@ -452,6 +493,7 @@ paths:
               schema: { type: object }
     post:
       operationId: writeProjection
+      tags: [Commissioning API]
       summary: Write the Brick projection into the graph (Oxigraph)
       requestBody:
         content:
@@ -470,6 +512,7 @@ paths:
   /openapi.yaml:
     get:
       operationId: getCommissioningOpenAPI
+      tags: [Commissioning API]
       summary: This OpenAPI document
       responses:
         "200":
