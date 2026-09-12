@@ -605,12 +605,15 @@ def align(
 
         is_dup = norm in duplicates
         confidence, reasons = _confidence(c, is_dup)
-        if norm in constraints.confirmed and constraints.confirmed[norm] == c.device["field_id"]:
+        human_confirmed = norm in constraints.confirmed and constraints.confirmed[norm] == c.device["field_id"]
+        if human_confirmed:
             confidence = "confirmed"
         acceptance = "confirmed" if confidence == "confirmed" else ("auto-accepted" if confidence == "high" else None)
         basis: list[EvidenceItem] = [c.tag, {"rung": 2, "kind": "signature", "score": c.fit.score, "detail": f"fits '{etype}' with required coverage {c.fit.required_coverage:.0%}" + (f", missing {', '.join(c.fit.missing_required)}" if c.fit.missing_required else "") + (f", contradicted by {', '.join(c.fit.contradictions)}" if c.fit.contradictions else "")}, c.plaus, c.topo, c.vendor]
         if c.capture:
             basis.insert(0, c.capture)
+        if human_confirmed:
+            basis.insert(0, {"rung": 0, "kind": "correction", "score": 1.0, "detail": "mapping confirmed by a person - fixed until a later correction says otherwise; the automatic evidence below is kept for the record"})
         alternatives = _alternatives(c, ranked_by_field[c.device["field_id"]], spec_norms) if confidence not in ("high", "confirmed") else []
         dev_ids: list[str] = []
 
