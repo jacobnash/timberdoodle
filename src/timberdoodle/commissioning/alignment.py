@@ -51,6 +51,7 @@ from timberdoodle.commissioning.points import (
     tokenize,
 )
 from timberdoodle.commissioning.spec_model import (
+    cite,
     infer_type_from_tag,
     normalize_tag,
     tag_letters,
@@ -611,7 +612,7 @@ def align(
         if c is None:
             interp, suspected, settle = interpret_absence(phase, e, cidr_scopes)
             dev_id = new_id("dev")
-            deviations.append({"id": dev_id, "kind": "spec_device_not_found", "spec_tag": e["tag"], "field_id": None, "entity_id": eid, "spec_says": f"{e['tag']} ({etype or e.get('type_as_written') or 'unknown type'}) with {len(e.get('expected_points', []))} points, {e['source'].get('document')} p.{e['source'].get('page')}", "field_shows": "no discovered device carries the tag, and no device's point signature fits it well enough to propose", "interpretation": interp, "suspected": suspected, "to_settle": settle, "severity": "info" if phase == "new_construction" else "warning", "status": "open", "opened_at": ts, "resolved_at": None, "resolved_by": None, "resolution": None})
+            deviations.append({"id": dev_id, "kind": "spec_device_not_found", "spec_tag": e["tag"], "field_id": None, "entity_id": eid, "spec_says": f"{e['tag']} ({etype or e.get('type_as_written') or 'unknown type'}) with {len(e.get('expected_points', []))} points ({cite(e)})", "field_shows": "no discovered device carries the tag, and no device's point signature fits it well enough to propose", "interpretation": interp, "suspected": suspected, "to_settle": settle, "severity": "info" if phase == "new_construction" else "warning", "status": "open", "opened_at": ts, "resolved_at": None, "resolved_by": None, "resolution": None})
             base["deviations"] = [dev_id]
             base["points"] = _entity_points([], list(e.get("expected_points", [])), [])
             base["confidence_basis"] = [{"rung": 1, "kind": "tag", "score": 0.0, "detail": "not found"}]

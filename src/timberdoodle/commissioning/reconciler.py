@@ -58,10 +58,12 @@ def main() -> None:
     conn = connect()
     db.ensure_schema(conn)
     store = None if args.no_graph else RemoteStore()
+    log.info("commissioning reconciler up: interval %.0fs, graph %s", args.interval, "off (--no-graph)" if store is None else os.environ.get("OXIGRAPH_URL", "default"))
     while True:
         started = time.monotonic()
         try:
-            run_once(conn, store)
+            results = run_once(conn, store)
+            log.info("sweep: %d project(s), %d failed, %.1fs", len(results), sum(1 for r in results if "error" in r), time.monotonic() - started)
         except Exception:
             log.exception("sweep failed; reconnecting")
             try:

@@ -261,8 +261,21 @@ def _question_for(e: SpecEquipment) -> str:
     if "duplicate_tag" in flags:
         parts.append("the tag is duplicated in the schedule - which entry is real?")
     if e.get("extraction_confidence", 1.0) < ESCALATION_THRESHOLD:
-        parts.append(f"the source (doc {e['source'].get('document')} p.{e['source'].get('page')}) was hard to read - confirm the tag and type")
+        parts.append(f"the source ({cite(e)}) was hard to read - confirm the tag and type")
     return "; ".join(parts) or "confirm this entry"
+
+
+def cite(e: SpecEquipment) -> str:
+    """'M-601 p.3', 'M-601', or 'no source recorded' - never 'None p.None'."""
+    src = e.get("source") or {}
+    doc, page = src.get("document"), src.get("page")
+    if doc and page is not None:
+        return f"{doc} p.{page}"
+    if doc:
+        return str(doc)
+    if page is not None:
+        return f"p.{page} (document not recorded)"
+    return "no source recorded"
 
 
 def spec_by_norm(spec: SpecModel) -> dict[str, SpecEquipment]:

@@ -10,6 +10,7 @@ from cx_fixtures import SPEC_MATERIAL
 from timberdoodle.commissioning.spec_model import (
     ESCALATION_THRESHOLD,
     build_spec_model,
+    cite,
     infer_type_from_tag,
     normalize_tag,
     tag_letters,
@@ -104,3 +105,10 @@ def test_flat_point_rows_attach_to_their_equipment_and_orphans_are_flagged():
 def test_unit_contradiction_in_the_spec_itself_is_flagged():
     spec = build_spec_model({"equipment": [{"tag": "AHU-1", "type": "AHU", "points": [{"name": "Supply Air Temp", "units": "cfm"}]}]})
     assert any(i["kind"] == "unit_contradiction" for i in spec["inconsistencies"])
+
+
+def test_cite_never_prints_none():
+    assert cite({"source": {"document": "M-601", "page": 3}}) == "M-601 p.3"
+    assert cite({"source": {"document": "M-601", "page": None}}) == "M-601"
+    assert cite({"source": {"document": None, "page": None}}) == "no source recorded"
+    assert cite({}) == "no source recorded"
