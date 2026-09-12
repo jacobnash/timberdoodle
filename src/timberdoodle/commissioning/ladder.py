@@ -221,6 +221,15 @@ def _rung3(entity: Entity, series: dict[str, list[Sample]], cfg: dict, now: date
         if len(s) >= cfg["min_samples"] and _is_flat(s, cfg["flat_epsilon"]):
             fell = 2
             evidence.append(f"re-checked rung 2: {worst[4].get('function')} was flat at {s[0][1]:g} for the whole window - this is a frozen sensor, not a tracking problem")
+        else:
+            # A sensor that was lively earlier but has not moved for the
+            # trailing quarter of the window is still a liveness failure -
+            # the tracking error it produces is a symptom, not the fault.
+            since = now - timedelta(hours=cfg["history_window_hours"] / 4)
+            tail = [(t, v) for t, v in s if t >= since]
+            if len(tail) >= cfg["min_samples"] and _is_flat(tail, cfg["flat_epsilon"]):
+                fell = 2
+                evidence.append(f"re-checked rung 2: {worst[4].get('function')} has been flat at {tail[0][1]:g} since {tail[0][0].isoformat()} ({len(tail)} samples) after moving earlier in the window - a sensor that recently froze, not a tracking problem")
     kind = "pressure" if "pressure" in worst[0] else "temperature"
     candidates = _candidates_for_no_response(kind) if "tracks" in worst[0] or "cooler" in worst[0] else [{"cause": "motor/starter not responding to the controller output", "would_distinguish": "check the starter/VFD run indication against the controller's output terminal"}, {"cause": "status input wired to the wrong contact or a failed current switch", "would_distinguish": "meter the status input while the motor is known to be running"}, {"cause": "hand/off/auto switch not in auto", "would_distinguish": "look at the switch"}]
     return {"rung": 3, "name": RUNG_NAMES[3], "result": "fail", "evidence": evidence, "symptom": "; ".join(str(c[3]) for c in failed), "candidates": candidates, "fell_to_rung": fell, "checked_at": ts}
@@ -252,6 +261,7 @@ def _rung4_passive(entity: Entity, series: dict[str, list[Sample]], cfg: dict, n
         return {"rung": 4, "name": RUNG_NAMES[4], "result": "insufficient_data", "evidence": ["no setpoint change large enough to act as a stimulus was observed in the window (night setback / morning warm-up / occupancy transitions supply these for free - observe across an occupancy boundary)", "no write transport is configured, so no active test was performed - see plan_command_tests for what one would do"], "symptom": None, "candidates": [], "fell_to_rung": None, "checked_at": ts}
     responded = [o for o in observed if o[6]]
     evidence = [f"{fn}: setpoint {old:g}->{new:g} at {t0.isoformat()}; sensor {b:g}->{a:g} within {cfg['response_window_minutes']:g} min ({'responded' if ok else 'did not move toward it'})" for fn, t0, old, new, b, a, ok, _ in observed]
+    evidence.append(f"passive test: {len(observed)} naturally occurring setpoint change(s) used as the stimulus - nothing was written to a controller")
     if len(responded) * 2 >= len(observed):
         return {"rung": 4, "name": RUNG_NAMES[4], "result": "pass", "evidence": evidence, "symptom": None, "candidates": [], "fell_to_rung": None, "checked_at": ts}
     worst = next(o for o in observed if not o[6])
@@ -282,7 +292,9 @@ def climb(entity: Entity, history: History, now: datetime | None = None, config:
         return {"highest_rung_passed": 0, "rungs": rungs}
     highest = 1
     uris = [p["point_uri"] for p in entity.get("points", []) if p.get("point_uri")]
-    series = history.window(uris, now - timedelta(hours=cfg["history_window_hours"]), now)
+    # window() is half-open on the end (matches point_history reads); a sample
+    # stamped exactly "now" is still evidence, so nudge the bound past it.
+    series = history.window(uris, now - timedelta(hours=cfg["history_window_hours"]), now + timedelta(seconds=1))
     r2 = _rung2(entity, series, cfg, now)
     rungs.append(r2)
     if r2["result"] == "pass":

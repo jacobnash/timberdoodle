@@ -135,7 +135,7 @@ def build_spec_model(material: dict) -> SpecModel:
         flags: list[str] = []
         if ctype is None:
             flags.append("unknown_type")
-        elif V.canonical_type(written_type) is None and written_type:
+        elif not written_type or V.canonical_type(written_type) is None:
             flags.append("type_inferred_from_tag")
         vintage = row.get("vintage")
         networked = row.get("networked")

@@ -80,7 +80,8 @@ def tokenize(text: str | None) -> list[str]:
 
 
 def object_type_of(object_identifier: str | None) -> str | None:
-    """`analogInput,1` / `analog-input:1` / `AI 1` -> 'analoginput'."""
+    """`analogInput,1` / `analog-input:1` / `AI 1` -> 'analoginput'
+    (lower-cased, punctuation dropped - a key into _OBJECT_TYPE_DIRECTION)."""
     if not object_identifier:
         return None
     head = re.split(r"[,:\s]", str(object_identifier).strip(), maxsplit=1)[0]

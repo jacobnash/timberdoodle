@@ -354,7 +354,7 @@ ABBREVIATIONS: dict[str, list[str]] = {
     "sasp": ["supply", "air", "static", "pressure"],
     "dp": ["differential", "pressure"],
     "flow": ["flow"],
-    "airflow": ["flow"],
+    "airflow": ["air", "flow"],
     "cfm": ["flow"],
     "gpm": ["flow"],
     "pos": ["position"],
@@ -423,6 +423,19 @@ ABBREVIATIONS: dict[str, list[str]] = {
     "alm": ["alarm"],
     "alarm": ["alarm"],
     "fail": ["alarm"],
+    # the equipment itself as the subject of an on/off point ("Chiller
+    # Enable", "AHU Status", "Unit Run") - function "unit"
+    "unit": ["unit"],
+    "chiller": ["unit"],
+    "chlr": ["unit"],
+    "boiler": ["unit"],
+    "blr": ["unit"],
+    "ahu": ["unit"],
+    "rtu": ["unit"],
+    "vav": ["unit"],
+    "fcu": ["unit"],
+    "system": ["unit"],
+    "sys": ["unit"],
 }
 
 # Single letters that only mean something after a location abbreviation
@@ -504,6 +517,8 @@ FUNCTION_PATTERNS: list[tuple[frozenset[str], str]] = [
     (frozenset({"speed"}), "speed"),
     (frozenset({"position"}), "position"),
     (frozenset({"alarm"}), "alarm"),
+    # last so any real quantity word wins the tie: "VAV Damper" is a damper
+    (frozenset({"unit"}), "unit"),
 ]
 
 # Functions whose natural role is on/off rather than a measured quantity -

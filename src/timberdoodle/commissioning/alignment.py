@@ -164,11 +164,7 @@ def _name_candidates(name: str | None) -> list[str]:
 def tag_evidence(spec: SpecEquipment, device: DiscoveredDevice, classified: list[ClassifiedPoint], aliases: dict[str, str]) -> EvidenceItem:
     spec_norm = normalize_tag(spec["tag"])
     spec_letters, spec_num = tag_letters(spec["tag"]), tag_number(spec["tag"])
-    type_aliases = {a.upper().rstrip("-") for a in V.EQUIPMENT_TYPES.get(spec.get("type") or "", {}).get("aliases", [])}
-    type_aliases.add(spec_letters)
-    for f_tok, s_tok in aliases.items():
-        if s_tok == spec_letters:
-            type_aliases.add(f_tok)
+    type_aliases = _type_aliases_for(spec, aliases)
 
     def score_name(name: str | None) -> tuple[float, str]:
         if not name:
@@ -314,7 +310,32 @@ def vendor_evidence(device: DiscoveredDevice) -> EvidenceItem:
 
 # --- gateway devices ----------------------------------------------------------------
 
-def split_gateway_device(device: DiscoveredDevice, spec_norms: dict[str, SpecEquipment]) -> list[tuple[DiscoveredDevice, list[ClassifiedPoint]]]:
+def _type_aliases_for(spec: SpecEquipment, aliases: dict[str, str]) -> set[str]:
+    """Letter tokens that may stand for this spec entry's tag letters: the
+    type's known abbreviations plus aliases learned from confirmations."""
+    letters = tag_letters(spec["tag"])
+    out = {a.upper().rstrip("-") for a in V.EQUIPMENT_TYPES.get(spec.get("type") or "", {}).get("aliases", [])}
+    out.add(letters)
+    out.update(f for f, s_tok in aliases.items() if s_tok == letters)
+    return out
+
+
+def resolve_tag_candidate(cand: str, spec_norms: dict[str, SpecEquipment], aliases: dict[str, str]) -> str | None:
+    """A tag-shaped token from a device/object name -> the normalized spec
+    tag it names, or None. Exact match first; else same number with a
+    letter token that is a known/learned abbreviation for exactly one
+    spec entry (ambiguity -> None, never a guess)."""
+    n = normalize_tag(cand)
+    if n in spec_norms:
+        return n
+    letters, num = tag_letters(cand), tag_number(cand)
+    if not (letters and num):
+        return None
+    hits = [norm for norm, e in spec_norms.items() if tag_number(e["tag"]) == num and letters in _type_aliases_for(e, aliases)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def split_gateway_device(device: DiscoveredDevice, spec_norms: dict[str, SpecEquipment], aliases: dict[str, str] | None = None) -> list[tuple[DiscoveredDevice, list[ClassifiedPoint]]]:
     """One BACnet device fronting several pieces of equipment (a JACE, a
     Siemens field panel) shows up as object names prefixed by different
     spec tags. Partition by referenced tag into virtual devices
@@ -326,9 +347,8 @@ def split_gateway_device(device: DiscoveredDevice, spec_norms: dict[str, SpecEqu
     for p in classified:
         hit = None
         for cand in _name_candidates(p.get("name")):
-            n = normalize_tag(cand)
-            if n in spec_norms:
-                hit = n
+            hit = resolve_tag_candidate(cand, spec_norms, aliases or {})
+            if hit:
                 break
         if hit:
             groups.setdefault(hit, []).append(p)
@@ -511,7 +531,7 @@ def align(
 
     units: list[tuple[DiscoveredDevice, list[ClassifiedPoint]]] = []
     for d in devices:
-        parts = split_gateway_device(d, spec_norms)
+        parts = split_gateway_device(d, spec_norms, constraints.aliases)
         if len(parts) > 1:
             assumptions.append(f"{d.get('name') or d['field_id']} fronts several pieces of equipment ({len(parts)} groups of object names carry different spec tags) - treated as {len(parts)} logical devices, not one")
         units.extend(parts)
