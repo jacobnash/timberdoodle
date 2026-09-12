@@ -124,6 +124,23 @@ def read_latest(conn: psycopg.Connection, point_uri: str):
     return None if row is None else _row_to_value(row)
 
 
+def read_latest_many(conn: psycopg.Connection, point_uris: list[str]) -> dict[str, tuple[datetime, object]]:
+    """Latest (ts, value) per point in one query - the commissioning
+    discovery pass needs "when was each of these hundreds of points last
+    heard from" for a whole building at once, not read_latest N+1'd."""
+    if not point_uris:
+        return {}
+    cur = conn.execute(
+        """
+        SELECT DISTINCT ON (point_uri) point_uri, ts, value, value_text, value_bool FROM point_history
+        WHERE point_uri = ANY(%s)
+        ORDER BY point_uri, ts DESC
+        """,
+        (point_uris,),
+    )
+    return {point_uri: (ts, _row_to_value((value, value_text, value_bool))) for point_uri, ts, value, value_text, value_bool in cur.fetchall()}
+
+
 def read_range(conn: psycopg.Connection, point_uri: str, start_ts: datetime, end_ts: datetime):
     cur = conn.execute(
         """
