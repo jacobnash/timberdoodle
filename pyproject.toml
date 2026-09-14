@@ -2,6 +2,7 @@
 name = "timberdoodle"
 version = "0.1.0"
 description = "Ontology-agnostic building data platform: API-first, load-time-pluggable (Brick/Haystack/DBO), headless by design"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
 dependencies = [
     "rdflib>=7.0.0",
@@ -29,6 +30,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "integration: requires live docker-compose services (oxigraph, postgres, mosquitto, jaeger)",
 ]

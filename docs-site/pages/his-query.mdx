@@ -2,18 +2,18 @@
 title: Query (hisRead)
 ---
 
-"What is this air handler doing right now?" In SkySpark the answer is one line of Axon in the
-shell — `readAll(ahu and air).hisRead(thisMonth)` — and every matching point's history is on
-screen. Timberdoodle has the same move: `GET /ingest/his?expr=...` takes that exact expression
-and returns every matched point's history as one JSON body, and `/ui/his.html` (through the
-gateway: `localhost:8080/ui/his.html`) is the shell-plus-chart surface over it — type a query, get
-charts, flip to a grid, download CSV.
+"What is this air handler doing right now?" One line — `readAll(ahu and air).hisRead(thisMonth)`
+— and every matching point's history is on screen: `GET /ingest/his?expr=...` takes that
+expression and returns every matched point's history as one JSON body, and `/ui/his.html`
+(through the gateway: `localhost:8080/ui/his.html`) is the shell-plus-chart surface over it — type
+a query, get charts, flip to a grid, download CSV.
 
-This is *not* Axon. It is the two Axon calls people actually reach for in a hurry — a Folio-style
-tag filter and `hisRead`/`hisRollup` — implemented over Timberdoodle's own two stores (the RDF
-entity graph in Oxigraph for the filter, `point_history` in Postgres/TimescaleDB for the
-history). Everything else Axon can do in that shell is deliberately out of scope; see "What is
-and isn't supported" below.
+The syntax is Axon-shaped (familiar if you've used SkySpark) but this is *not* Axon. It is the
+two calls people actually reach for in a hurry — a Folio-style tag filter and
+`hisRead`/`hisRollup` — implemented over Timberdoodle's own two stores (the RDF entity graph in
+Oxigraph for the filter, `point_history` in Postgres/TimescaleDB for the history). Everything
+else Axon can do in that shell is deliberately out of scope; see "What is and isn't supported"
+below.
 
 ## The query language
 

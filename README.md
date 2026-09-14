@@ -162,8 +162,8 @@ existing admin account — create one first with `POST /auth/orgs` (see
 
 ### Query: `readAll(ahu and air).hisRead(thisMonth)`
 
-The SkySpark reflex — type one line, see every point on a piece of
-equipment charted — is `GET /ingest/his` plus `ui/his.html`
+Type one line, see every point on a piece of equipment charted — that's
+`GET /ingest/his` plus `ui/his.html`
 (localhost:8080/ui/his.html through the gateway, `Query` in the top nav).
 The expression is Axon-shaped: a tag filter (`and`/`or`/`not`,
 `tag == value`) whose words work the way people talk about Brick data
@@ -327,3 +327,9 @@ has the `integration` marker or doesn't), so it runs the full suite,
 including tests that hit live Postgres/Oxigraph/MQTT — bring the stack up
 first. Use the second command on a fresh checkout with nothing running.
 See `pyproject.toml` for the marker definition.
+
+## License
+
+AGPLv3 — see [LICENSE](LICENSE). You can self-host and charge for it;
+if you modify and run it as a network service for others, you must make
+your modified source available to them too.
