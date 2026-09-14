@@ -55,7 +55,9 @@ from datetime import date, datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from timberdoodle import brick_vocab
+from timberdoodle import brick_vocab, tracing
+
+tracer = tracing.get_tracer(__name__)
 
 DEFAULT_SPAN = "today"
 
@@ -1038,20 +1040,28 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
     readAll with no matches is an empty, successful result."""
     from timberdoodle import timeseries
 
-    span = resolve_span(query.span_text, now, tz)
-    graph = graph_vocab(store)
-    matched = match_entities(store, query.filter, graph)
+    date_span = resolve_span(query.span_text, now, tz)
+    with tracer.start_as_current_span("hisquery.graph_vocab"):
+        graph = graph_vocab(store)
+    with tracer.start_as_current_span("hisquery.match_entities") as sp:
+        matched = match_entities(store, query.filter, graph)
+        sp.set_attribute("matched", len(matched))
     if query.mode == "read":
         if not matched:
             raise NoMatchError(f"read({query.filter_text}): no rec matches")
         matched = matched[:1]
 
-    point_uris = expand_to_points(store, matched)
-    meta = describe_points(store, point_uris)
+    with tracer.start_as_current_span("hisquery.expand_to_points") as sp:
+        point_uris = expand_to_points(store, matched)
+        sp.set_attribute("points", len(point_uris))
+    with tracer.start_as_current_span("hisquery.describe_points"):
+        meta = describe_points(store, point_uris)
     # Computed points (derivation_engine) carry unit/label only on their
     # history rows, never as graph tags - without this they'd chart as an
     # unlabelled "mock-ahu-1" with no unit.
-    for uri, (unit, label) in timeseries.read_point_labels(ts_conn, point_uris).items():
+    with tracer.start_as_current_span("hisquery.read_point_labels"):
+        labels = timeseries.read_point_labels(ts_conn, point_uris)
+    for uri, (unit, label) in labels.items():
         info = meta[uri]
         if not info["unit"] and unit:
             info["unit"] = unit
@@ -1062,18 +1072,23 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
     if query.rollup:
         interval = parse_interval(query.rollup.interval)
         try:
-            history = {
-                uri: (rows, False)
-                for uri, rows in timeseries.read_rollup(
-                    ts_conn, point_uris, span.start, span.end, query.rollup.fold,
-                    interval.seconds, interval.months, tz,
-                ).items()
-            }
+            with tracer.start_as_current_span("hisquery.read_rollup") as sp:
+                sp.set_attribute("points", len(point_uris))
+                sp.set_attribute("interval", interval.text)
+                history = {
+                    uri: (rows, False)
+                    for uri, rows in timeseries.read_rollup(
+                        ts_conn, point_uris, date_span.start, date_span.end, query.rollup.fold,
+                        interval.seconds, interval.months, tz,
+                    ).items()
+                }
         except ValueError as exc:
             raise HisQueryError(str(exc)) from exc
         rollup = {"fold": query.rollup.fold, "interval": interval.text}
     else:
-        history = timeseries.read_range_many(ts_conn, point_uris, span.start, span.end, limit)
+        with tracer.start_as_current_span("hisquery.read_range_many") as sp:
+            sp.set_attribute("points", len(point_uris))
+            history = timeseries.read_range_many(ts_conn, point_uris, date_span.start, date_span.end, limit)
 
     series = []
     for uri in point_uris:
@@ -1093,7 +1108,7 @@ def run_query(store, ts_conn, query: Query, now: datetime, tz: str = "UTC", limi
         "expr": query.source,
         "mode": query.mode,
         "filter": query.filter_text,
-        "span": {"start": span.start.timestamp(), "end": span.end.timestamp(), "label": span.label, "tz": tz},
+        "span": {"start": date_span.start.timestamp(), "end": date_span.end.timestamp(), "label": date_span.label, "tz": tz},
         "rollup": rollup,
         "limit": limit,
         "matched": matched[:_MATCHED_PREVIEW],
