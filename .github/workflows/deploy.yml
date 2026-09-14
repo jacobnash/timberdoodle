@@ -29,21 +29,9 @@ jobs:
           # back to the dispatch event's own sha when triggered manually
           # (workflow_run.head_sha doesn't exist on that event).
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          # fbf/ is a submodule pointing at a separate private repo, cloned
-          # in its own step below instead of via submodules: true here.
-          # checkout temporarily sets a *global* git url.insteadOf rule
-          # (SSH -> HTTPS, using its own token) for the whole duration of
-          # this step, including any submodule clone that would happen
-          # inside it - that hijacks the fbf submodule's SSH URL before the
-          # runner's own SSH deploy key for it ever gets a chance, failing
-          # with "repository not found" (confirmed live; persist-credentials:
-          # false does NOT help - it only controls cleanup afterward, not
-          # what's active during this step). Letting checkout finish first
-          # means its temporary config is already removed by the time the
-          # next step clones fbf, so the deploy key works as configured.
-
-      - name: Checkout fbf submodule
-        run: git submodule update --init
+          # fbf/ is a public submodule now - checkout can clone it directly,
+          # no separate step or deploy key needed.
+          submodules: true
 
       - name: Deploy stack
         # The only command this runner user can run as root - see

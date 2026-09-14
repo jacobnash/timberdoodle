@@ -106,18 +106,14 @@ this needs `docker compose exec`, not just `up`.
 
 ## FBF submodule
 
-`fbf/` is a separate, independently-versioned private repo
-(`jacobnash/fbf`), vendored here as a git submodule rather than merged in -
-this repo's docs (`docs-site/pages/...`, the API catalog) reference
-`fbf/openapi.yaml` directly. `actions/checkout` needs `submodules: true` to
-populate it (already set in `deploy.yml`), and since it's a *different*
-private repo, the default `GITHUB_TOKEN` doesn't cover it - the runner has
-its own read-only SSH deploy key for `jacobnash/fbf` at
-`/home/github-runner/.ssh/fbf_deploy_key`, scoped via
-`/home/github-runner/.ssh/config` to only apply to `github.com` SSH
-connections made by that user. To rotate it: generate a new keypair, add
-the new public half as a deploy key on the `fbf` repo (`gh repo deploy-key
-add`), replace the private half in that path, remove the old deploy key.
+`fbf/` is a separate, independently-versioned public repo (`jacobnash/fbf`),
+vendored here as a git submodule rather than merged in - this repo's docs
+(`docs-site/pages/...`, the API catalog) reference `fbf/openapi.yaml`
+directly. `actions/checkout`'s `submodules: true` (set in `deploy.yml`)
+clones it directly - no separate step or deploy key needed now that it's
+public. (It used to be private, requiring a read-only SSH deploy key at
+`/home/github-runner/.ssh/fbf_deploy_key` on the runner - if that key/config
+is still on nash-srv from before, it's dead weight and safe to remove.)
 
 ## Reaching the parts that aren't public
 
