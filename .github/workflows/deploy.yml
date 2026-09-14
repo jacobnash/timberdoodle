@@ -19,7 +19,12 @@ permissions:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # The head_repository check matters now that the repo is public: without
+    # it, a completed CI run from an outside fork's pull request would also
+    # satisfy "workflow_run ... conclusion == success" and fire this job on
+    # the self-hosted runner. workflow_dispatch is inherently safe - GitHub
+    # only lets collaborators with write access trigger it.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: [self-hosted, nash-srv, timberdoodle]
     steps:
       - uses: actions/checkout@v4
