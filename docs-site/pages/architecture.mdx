@@ -2,14 +2,14 @@
 title: Architecture
 ---
 
-Timberdoodle is fourteen containers under one `docker-compose.yml`: five
-infrastructure services, eight daemons (one shared Docker image, a
-different `command:` each), and an nginx gateway in front of the five
-HTTP APIs (ingest, fault, derivation, validate, auth). `docker compose up
+Timberdoodle is sixteen containers under one `docker-compose.yml`: five
+infrastructure services, ten daemons (one shared Docker image, a
+different `command:` each), and an nginx gateway in front of the six
+HTTP APIs (ingest, fault, derivation, validate, auth, commissioning). `docker compose up
 -d` starts all of it. Nothing here is guessed — this is the real
 `docker-compose.yml` and the real CLI entry points.
 
-A 15th container, `haystack_puller`, exists but is opt-in — gated behind
+A 17th container, `haystack_puller`, exists but is opt-in — gated behind
 `docker compose --profile haystack-pull`, so plain `docker compose up -d`
 correctly excludes it. See [Haystack Puller](/haystack-puller).
 
@@ -88,10 +88,11 @@ process that evaluates one:
 An `nginx:alpine` container (`gateway/nginx.conf`) is the one thing
 external callers talk to — `localhost:8080`. It does two jobs:
 
-- **Path routing**, so callers don't need to know five separate ports:
+- **Path routing**, so callers don't need to know six separate ports:
   `/ingest/*` → `ingest_api:8000`, `/fault/*` → `fault_api:8002`,
   `/derivation/*` → `derivation_api:8003`, `/validate/*` →
-  `validate_api:8005`, `/auth/*` → `auth_api:8006` (plus the exact-match
+  `validate_api:8005`, `/auth/*` → `auth_api:8006`, `/commissioning/*` →
+  `commissioning_api:8008` (plus the exact-match
   `/auth/login` and `/auth/orgs` locations, since those two routes are
   public — no token exists yet at login time, and creating the first org
   can't require one either). It also serves the static demo UI at `/ui/`
@@ -131,7 +132,7 @@ external now has to authenticate before it can reach either.
 | `postgres` | `timescale/timescaledb:latest-pg16` | Timescale hypertable, `point_history` — the actual reading values. | 5433 → 5432 in-container |
 | `jaeger` | `jaegertracing/all-in-one:latest` | Trace collection/UI. Every process below exports here. | 16686 (UI), 4318 (OTLP HTTP) |
 | `grafana` | `grafana/grafana-oss:latest` | Dashboards over Postgres — a datasource and starter dashboard are auto-provisioned. Login is the image default `admin`/`admin`; anonymous admin access is available for local dev via `GRAFANA_ANON_ENABLED=true` but off by default. | 3033 → 3000 in-container |
-| `gateway` | `nginx:alpine` | JWT-auth-gated path router in front of the five HTTP APIs, plus the static UI. | 8080 |
+| `gateway` | `nginx:alpine` | JWT-auth-gated path router in front of the six HTTP APIs, plus the static UI. | 8080 |
 
 Postgres is deliberately remapped to host port 5433 rather than the
 default 5432, to avoid colliding with a locally-running Postgres
@@ -180,9 +181,9 @@ both because the ontology may not be loaded and because Oxigraph takes
 tens of seconds on an unbound `rdfs:subClassOf*` inside a filter when
 it is.
 
-## The eight daemons
+## The ten daemons
 
-All eight now build from one root `Dockerfile` (a single `pip install -e .`
+All ten now build from one root `Dockerfile` (a single `pip install -e .`
 image, editable so the `__file__`-relative paths each API uses to find
 its own OpenAPI spec keep resolving the same way they do outside Docker)
 and run as `docker-compose.yml` services, each with the same image and a
@@ -205,6 +206,8 @@ running a process bare-metal outside Docker.
 | `derivation_engine.py` | mosquitto (cur-mode), postgres (sweep, His inputs), oxigraph (SPARQL select) | postgres (`point_history`), oxigraph (lineage triples) | — |
 | `validate_api.py` | HTTP `POST /validate` (no body — always validates current live state) | oxigraph (read-only, via `RemoteStore`) | 8005 |
 | `auth_api.py` | HTTP CRUD (`/login`, `/orgs`, `/users`, `/sites`, `/api-keys`, `/logout`), gateway-internal `GET /internal/revoked-jtis` | postgres (orgs/sites/users/API keys/revoked JTIs) | 8006 |
+| `commissioning/api.py` | HTTP: projects, spec material, pushed devices, passes, corrections, captures, risks, projections | postgres (`cx_*` JSONB tables, `faults` mirror), oxigraph (Brick projection, only on `POST .../projection` / `project_to_graph`) | 8008 |
+| `commissioning/reconciler.py` | postgres (`cx_*`, `point_history`), oxigraph (discovery, SPARQL select) | postgres (`cx_*`, `faults` mirror) | — |
 
 Each daemon's container bind-mounts the repo root (`.:/app`) so
 `rules.json`/`webhooks.json`/`derivations.json` — read/written by these
@@ -280,7 +283,7 @@ derivations, sharing nothing but that one config file.
 ## Why stdlib `http.server`, not a framework
 
 `ingest_api.py`, `fault_api.py`, `derivation_api.py`, `validate_api.py`,
-and `auth_api.py` are all built on Python's stdlib
+`auth_api.py` and `commissioning/api.py` are all built on Python's stdlib
 `http.server.ThreadingHTTPServer` rather than Flask/FastAPI/etc. None of
 them is more than a handful of routes — a framework dependency for that
 is a cost with no payoff here. Each request
@@ -295,7 +298,7 @@ failure in `ingest_api.py`.
 Every process calls `tracing.init_tracing(<service_name>)` on startup and
 gets a real OpenTelemetry span around every nontrivial operation — not a
 log line. This was a direct response to a multi-hour debugging session
-where a silent failure had zero visible signal. All eight daemons export
+where a silent failure had zero visible signal. All ten daemons export
 to Jaeger's OTLP HTTP endpoint — `jaeger:4318` inside Docker,
 `localhost:4318` outside it, both by the same
 `OTEL_EXPORTER_OTLP_ENDPOINT` override mechanism; view traces at

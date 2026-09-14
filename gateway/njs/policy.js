@@ -8,7 +8,8 @@
  * second matrix encoding the same fact a different way is the first
  * thing that goes stale when a route is added. Enumerated straight from
  * openapi.yaml / fault-api-openapi.yaml / derivation-api-openapi.yaml /
- * validate-api-openapi.yaml - keep this table in sync with those specs,
+ * validate-api-openapi.yaml / commissioning-api-openapi.yaml - keep this
+ * table in sync with those specs,
  * not the other way around.
  *
  * Paths are matched as seen at the gateway (with the service prefix),
@@ -59,6 +60,39 @@ const ROUTES = [
 
   // ops_api
   ["GET",    /^\/ops\/status$/,                      "ops", "viewer"],
+
+  // commissioning_api - reads for viewers; anything that changes the
+  // model (spec, devices, passes, corrections, captures, risks,
+  // projection writes) is operator. Deleting a project is admin.
+  ["GET",    /^\/commissioning\/vocabulary$/,                                  "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects$/,                                    "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects$/,                                    "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+$/,                              "commissioning", "viewer"],
+  ["DELETE", /^\/commissioning\/projects\/[^/]+$/,                              "commissioning", "admin"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/phase$/,                       "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/spec$/,                        "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/spec$/,                        "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/devices$/,                     "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/devices$/,                     "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/passes$/,                      "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/passes$/,                      "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/passes\/[^/]+$/,                "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/report$/,                      "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/entities$/,                    "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/entities\/[^/]+$/,              "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/deviations$/,                  "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/questions$/,                   "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/corrections$/,                 "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/corrections$/,                 "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/punchlist$/,                   "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/captures$/,                    "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/captures$/,                    "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/risks$/,                       "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/risks$/,                       "commissioning", "operator"],
+  ["DELETE", /^\/commissioning\/projects\/[^/]+\/risks\/[^/]+$/,                 "commissioning", "operator"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/freshness$/,                   "commissioning", "viewer"],
+  ["GET",    /^\/commissioning\/projects\/[^/]+\/projection$/,                  "commissioning", "viewer"],
+  ["POST",   /^\/commissioning\/projects\/[^/]+\/projection$/,                  "commissioning", "operator"],
 
   // auth_api - POST /auth/login has its own exact-match nginx location
   // with no js_access at all (can't require a token to get a token), so

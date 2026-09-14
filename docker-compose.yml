@@ -214,6 +214,34 @@ services:
       <<: *http-api-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/openapi.yaml')"]
 
+  # Spec-grounded commissioning agent (docs-site/pages/commissioning.mdx).
+  # The API stores spec material / device pushes / corrections / captures
+  # and runs passes on demand; the reconciler runs a scheduled pass per
+  # project so liveness, drift and absence keep being observed between
+  # requests. Both read the graph and point_history; neither writes the
+  # graph unless asked (project_to_graph).
+  commissioning_api:
+    build: .
+    command: python -m timberdoodle.commissioning.api
+    environment: *daemon-env
+    volumes:
+      - .:/app
+    depends_on: *daemon-depends-on
+    healthcheck:
+      <<: *http-api-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/openapi.yaml')"]
+
+  commissioning_reconciler:
+    build: .
+    command: python -m timberdoodle.commissioning.reconciler
+    restart: unless-stopped
+    environment:
+      <<: *daemon-env
+      COMMISSIONING_PASS_INTERVAL: ${COMMISSIONING_PASS_INTERVAL:-900}
+    volumes:
+      - .:/app
+    depends_on: *daemon-depends-on
+
   haystack_puller:
     build: .
     command: python -m timberdoodle.haystack_puller
@@ -312,6 +340,8 @@ services:
       auth_api:
         condition: service_healthy
       ops_api:
+        condition: service_healthy
+      commissioning_api:
         condition: service_healthy
 
 volumes:

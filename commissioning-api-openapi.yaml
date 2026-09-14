@@ -1,0 +1,709 @@
+openapi: 3.1.0
+info:
+  title: Timberdoodle Commissioning API
+  version: 0.1.0
+  description: >
+    Spec-grounded BAS discovery, commissioning and verification. Stores the
+    inputs (spec material, pushed device data, corrections, field captures,
+    accepted risks) for a project and runs passes that align what the
+    drawings say against what the network shows, climb the four-rung
+    verification ladder, reconcile against the previous pass, and produce
+    a machine-parseable report plus a route-ordered field list. Served on
+    port 8008, proxied at /commissioning/ by the gateway. Every route except
+    /openapi.yaml and /docs requires a gateway-forwarded JWT; the gateway's
+    X-User header is recorded as the author of corrections, captures and
+    risks.
+servers:
+  - url: http://localhost:8080/commissioning
+    description: >-
+      Via the gateway (docker-compose) - the actual externally-reachable
+      path. Every route is JWT-verified in nginx itself (gateway/njs/) -
+      see README's "Gateway auth" section for how to get a token.
+  - url: http://localhost:8008
+    description: >-
+      Direct - only reachable bare-metal or from inside the Docker
+      network; docker-compose.yml does not publish this port.
+tags:
+  - name: Commissioning API
+    description: Projects, spec material, device data, passes, corrections, captures, risks, projections.
+paths:
+  /vocabulary:
+    get:
+      operationId: getVocabulary
+      tags: [Commissioning API]
+      summary: Canonical equipment types, point roles, correction kinds, confidence levels
+      responses:
+        "200":
+          description: Vocabulary the agent reasons with
+          content:
+            application/json:
+              schema: { type: object }
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [Commissioning API]
+      summary: All commissioning projects
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Project" }
+    post:
+      operationId: createProject
+      tags: [Commissioning API]
+      summary: Create a project (one building / one engagement)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                phase:
+                  description: Omit to let the agent infer it - the inference is stated as an assumption in every report.
+                  $ref: "#/components/schemas/Phase"
+                cidr_scopes:
+                  type: array
+                  items: { type: string }
+                  description: Network ranges the connector actually scanned. Absence outside these is never treated as nonexistence.
+                settings:
+                  type: object
+                  description: 'Optional tuning - {"ladder": {...}, "reconcile": {...}, "project_to_graph": bool}'
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+  /projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: getProject
+      tags: [Commissioning API]
+      summary: Project with its last pass metadata
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "404": { description: Unknown project }
+    delete:
+      operationId: deleteProject
+      tags: [Commissioning API]
+      summary: Delete a project and everything stored for it
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Unknown project }
+  /projects/{projectId}/phase:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    post:
+      operationId: setPhase
+      tags: [Commissioning API]
+      summary: State (or un-state) the engagement phase and CIDR scopes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phase:
+                  oneOf:
+                    - $ref: "#/components/schemas/Phase"
+                    - type: "null"
+                note: { type: string }
+                cidr_scopes:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+  /projects/{projectId}/spec:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: getSpec
+      tags: [Commissioning API]
+      summary: Spec material as supplied and the spec model built from it
+      responses:
+        "200":
+          description: Material and model (both null until supplied)
+          content:
+            application/json:
+              schema: { type: object }
+    post:
+      operationId: putSpec
+      tags: [Commissioning API]
+      summary: Supply spec material (equipment schedule, point list, drawings extractions)
+      description: >
+        Replaces the project's spec material and rebuilds the spec model
+        (Phase 1). Inconsistencies are flagged, not reconciled; entries
+        below the confidence threshold appear under `escalate`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SpecMaterial" }
+      responses:
+        "200":
+          description: Spec model
+          content:
+            application/json:
+              schema: { type: object }
+        "400": { description: Malformed material }
+  /projects/{projectId}/devices:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listDevices
+      tags: [Commissioning API]
+      summary: Device data pushed for this project
+      responses:
+        "200":
+          description: Devices
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+    post:
+      operationId: pushDevices
+      tags: [Commissioning API]
+      summary: Push discovered device data (FBF GET /devices rows, optionally with learned objects)
+      description: >
+        Rows in FBF's own shape - {id, protocol, device_instance, address,
+        vendor_id, status, first_seen_at, last_seen_at} - each optionally
+        carrying `objects` or `learned` (its POST /learn result:
+        [{object_identifier, label, units?, present_value?}]) and
+        `topic_prefix` (which is how points get their URIs and history).
+        Devices already in the graph are discovered automatically; pushing
+        is for what the graph does not carry (instance, address, vendor).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                devices:
+                  type: array
+                  items: { type: object }
+      responses:
+        "200":
+          description: Stored field ids
+          content:
+            application/json:
+              schema: { type: object }
+  /projects/{projectId}/passes:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listPasses
+      tags: [Commissioning API]
+      summary: Recent passes (metadata and summary only)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+      responses:
+        "200":
+          description: Passes
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+    post:
+      operationId: runPass
+      tags: [Commissioning API]
+      summary: Run one full pass now and return the report
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                use_graph:
+                  type: boolean
+                  default: true
+                  description: Discover devices from Oxigraph/history as well as pushed data
+                project_to_graph:
+                  type: boolean
+                  default: false
+                  description: Also write the Brick projection of settled entities to the graph
+      responses:
+        "200":
+          description: Pass report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+  /projects/{projectId}/passes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/id"
+    get:
+      operationId: getPass
+      tags: [Commissioning API]
+      summary: One stored pass report
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+        "404": { description: Unknown pass }
+  /projects/{projectId}/report:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: latestReport
+      tags: [Commissioning API]
+      summary: The latest pass report
+      responses:
+        "200":
+          description: 'Report, or {report: null} before the first pass'
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
+  /projects/{projectId}/entities:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listEntities
+      tags: [Commissioning API]
+      summary: Canonical-model entities from the latest pass
+      parameters:
+        - in: query
+          name: confidence
+          schema: { $ref: "#/components/schemas/Confidence" }
+      responses:
+        "200":
+          description: Entities
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Entity" }
+  /projects/{projectId}/entities/{id}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/id"
+    get:
+      operationId: getEntity
+      tags: [Commissioning API]
+      summary: One entity with its open deviation records
+      responses:
+        "200":
+          description: Entity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Entity" }
+        "404": { description: Unknown entity }
+  /projects/{projectId}/deviations:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listDeviations
+      tags: [Commissioning API]
+      summary: Deviations (spec vs field), open by default
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [open, resolved, all], default: open }
+      responses:
+        "200":
+          description: Deviations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Deviation" }
+  /projects/{projectId}/questions:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listQuestions
+      tags: [Commissioning API]
+      summary: Batched one-action escalations (accept / correct / reject bodies ready to POST as corrections)
+      responses:
+        "200":
+          description: Questions
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+  /projects/{projectId}/corrections:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listCorrections
+      tags: [Commissioning API]
+      summary: Corrections recorded so far
+      responses:
+        "200":
+          description: Corrections
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Correction" } }
+    post:
+      operationId: postCorrection
+      tags: [Commissioning API]
+      summary: Record a correction, re-score the whole building, report what moved
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Correction" }
+      responses:
+        "200":
+          description: The correction, its effect, and the confidence movement it caused
+          content:
+            application/json:
+              schema: { type: object }
+        "400": { description: Unknown correction kind or missing field }
+  /projects/{projectId}/punchlist:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: getPunchlist
+      tags: [Commissioning API]
+      summary: Field verification list, ordered by route and grouped by location
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [open, resolved, all], default: open }
+      responses:
+        "200":
+          description: Items and the same items grouped by location
+          content:
+            application/json:
+              schema: { type: object }
+  /projects/{projectId}/captures:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listCaptures
+      tags: [Commissioning API]
+      summary: Field captures ingested so far (including unreadable and unprompted ones)
+      responses:
+        "200":
+          description: Captures
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/FieldCapture" } }
+    post:
+      operationId: postCapture
+      tags: [Commissioning API]
+      summary: Ingest one field capture
+      description: >
+        Only what a person (or an upstream vision step) could actually
+        read goes in `legible`; unread characters stay as '?' and land in
+        `partial`; what could not be read at all is listed in
+        `unreadable`. Nothing is completed by guessing. Consecutive
+        captures at one location are grouped as one device. Captures no
+        punch item asked for are kept as `unprompted`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FieldCapture" }
+      responses:
+        "201":
+          description: Stored capture and the punch items it resolved
+          content:
+            application/json:
+              schema: { type: object }
+  /projects/{projectId}/risks:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: listRisks
+      tags: [Commissioning API]
+      summary: Accepted risks (kept strictly separate from faults)
+      responses:
+        "200":
+          description: Risks
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/AcceptedRisk" } }
+    post:
+      operationId: postRisk
+      tags: [Commissioning API]
+      summary: Accept a risk on an entity - would-be faults on it are reported under the risk, not as faults
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AcceptedRisk" }
+      responses:
+        "201":
+          description: Stored risk
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcceptedRisk" }
+  /projects/{projectId}/risks/{id}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/id"
+    delete:
+      operationId: deleteRisk
+      tags: [Commissioning API]
+      summary: Withdraw an accepted risk
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Unknown risk }
+  /projects/{projectId}/freshness:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: getFreshness
+      tags: [Commissioning API]
+      summary: Honest freshness - fresh / stale / missing / known absent / never seen, as of now
+      responses:
+        "200":
+          description: Freshness report
+          content:
+            application/json:
+              schema: { type: object }
+  /projects/{projectId}/projection:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      operationId: getProjection
+      tags: [Commissioning API]
+      summary: Brick triples or Haystack records projected from settled entities, with what was lost
+      parameters:
+        - in: query
+          name: format
+          schema: { type: string, enum: [brick, haystack], default: brick }
+        - in: query
+          name: include_unsettled
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Projection
+          content:
+            application/json:
+              schema: { type: object }
+    post:
+      operationId: writeProjection
+      tags: [Commissioning API]
+      summary: Write the Brick projection into the graph (Oxigraph)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                include_unsettled: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Triples written and the lossy/skipped report
+          content:
+            application/json:
+              schema: { type: object }
+        "503": { description: No graph store configured }
+  /openapi.yaml:
+    get:
+      operationId: getCommissioningOpenAPI
+      tags: [Commissioning API]
+      summary: This OpenAPI document
+      responses:
+        "200":
+          description: YAML OpenAPI spec
+components:
+  parameters:
+    projectId:
+      in: path
+      name: projectId
+      required: true
+      schema: { type: string }
+    id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+  schemas:
+    Phase:
+      type: string
+      enum: [new_construction, warranty, operations, retrofit]
+    Confidence:
+      type: string
+      enum: [confirmed, high, medium, low, unmatched]
+    Project:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        phase:
+          oneOf:
+            - $ref: "#/components/schemas/Phase"
+            - type: "null"
+        phase_assumed: { type: boolean }
+        phase_rationale: { type: ["string", "null"] }
+        cidr_scopes: { type: array, items: { type: string } }
+        settings: { type: object }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SpecMaterial:
+      type: object
+      description: >
+        Extracted spec content. Each equipment row: tag (required), type
+        (as written - mapped to a canonical type, or inferred from the tag
+        and flagged), description, serves/fed_by/feeds (tags), location
+        {building, floor, room, description}, points [{name, units?,
+        role?, function?}], source {document, page}, vintage, networked
+        (default true), extraction_confidence (0-1),
+        expected_terminal_count. A flat `points` list with an `equipment`
+        tag per row is also accepted.
+      properties:
+        documents:
+          type: array
+          items: { type: object }
+        equipment:
+          type: array
+          items: { type: object, required: [tag] }
+        points:
+          type: array
+          items: { type: object }
+        assumptions:
+          type: array
+          items: { type: string }
+    Entity:
+      type: object
+      description: One canonical-model entity - plain English, ontology-neutral.
+      required: [id, confidence]
+      properties:
+        id: { type: string }
+        canonical_type: { type: ["string", "null"] }
+        description: { type: string }
+        spec_tag: { type: ["string", "null"] }
+        field_identity: { type: ["object", "null"] }
+        relationships: { type: object }
+        points: { type: array, items: { type: object } }
+        ladder: { type: object }
+        confidence: { $ref: "#/components/schemas/Confidence" }
+        confidence_basis: { type: array, items: { type: object } }
+        alternatives: { type: array, items: { type: object } }
+        acceptance: { type: ["string", "null"] }
+        provenance: { type: object }
+        liveness: { type: object }
+        deviations: { type: array, items: { type: string } }
+        faults: { type: array, items: { type: string } }
+        accepted_risks: { type: array, items: { type: string } }
+        reconcile_state: { type: ["string", "null"], enum: [unchanged, absent, missing, returned, new, drifted, re_addressed, null] }
+    Deviation:
+      type: object
+      required: [id, kind, spec_says, field_shows, interpretation, to_settle, status]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [spec_device_not_found, field_device_not_in_spec, type_mismatch, point_mismatch, duplicate_claim, unit_contradiction, topology_mismatch] }
+        spec_tag: { type: ["string", "null"] }
+        field_id: { type: ["string", "null"] }
+        entity_id: { type: ["string", "null"] }
+        spec_says: { type: string }
+        field_shows: { type: string }
+        interpretation: { type: string }
+        suspected: { type: ["string", "null"] }
+        to_settle: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+        status: { type: string, enum: [open, resolved] }
+    Correction:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [confirm_mapping, correct_mapping, reject_mapping, correct_type, confirm_topology, naming_alias, resolve_deviation, accept_spec_entry, correct_spec_entry]
+        id: { type: string, readOnly: true }
+        spec_tag: { type: ["string", "null"] }
+        field_id: { type: ["string", "null"] }
+        entity_id: { type: ["string", "null"] }
+        canonical_type: { type: ["string", "null"] }
+        deviation_id: { type: string }
+        relationship:
+          type: ["object", "null"]
+          description: 'For confirm_topology - {"kind": "feeds", "from": tag, "to": tag}'
+        alias:
+          type: ["object", "null"]
+          description: 'For naming_alias - {"field_token": "AH", "spec_token": "AHU"}'
+        fields:
+          type: object
+          description: For correct_spec_entry - the spec row fields to overwrite
+        note: { type: ["string", "null"] }
+        by: { type: string, readOnly: true, description: Who posted it (X-User from the gateway) }
+        at: { type: string, format: date-time, readOnly: true }
+        use_graph: { type: boolean, default: true, writeOnly: true }
+    FieldCapture:
+      type: object
+      properties:
+        id: { type: string }
+        captured_at: { type: string, format: date-time }
+        engineer: { type: ["string", "null"] }
+        location:
+          type: ["object", "null"]
+          properties:
+            building: { type: string }
+            floor: { type: string }
+            room: { type: string }
+            description: { type: string }
+        punch_item_id: { type: ["string", "null"] }
+        note: { type: ["string", "null"] }
+        photo_ref: { type: ["string", "null"] }
+        legible:
+          type: object
+          description: >-
+            What was actually read - e.g. {"tag": "AHU-1", "address": "10.0.0.11",
+            "controller_name": "AHU_1", "nameplate": {"model": "...", "serial": "..."}}.
+            Use '?' for characters not read.
+        partial: { type: object }
+        unreadable:
+          type: array
+          items: { type: string }
+        status: { type: string, enum: [ingested, unreadable, unprompted] }
+        group_id: { type: ["string", "null"] }
+    AcceptedRisk:
+      type: object
+      required: [description]
+      properties:
+        id: { type: string, readOnly: true }
+        entity_id: { type: ["string", "null"] }
+        field_id: { type: ["string", "null"] }
+        spec_tag: { type: ["string", "null"], description: At least one of entity_id / field_id / spec_tag must name what the risk covers }
+        description: { type: string }
+        accepted_by: { type: string, description: Defaults to X-User }
+        accepted_at: { type: string, format: date-time, readOnly: true }
+        review_by: { type: string, format: date, description: Defaults to 90 days out - a risk is never accepted without a review date }
+    Report:
+      type: object
+      description: >
+        The agent's whole output for one pass. Sections: pass (phase and
+        whether it was assumed), spec_model, mappings, entities,
+        ladder_results, deviations (open), faults and accepted_risks (kept
+        separate), field_list (by location, route-ordered),
+        unresolved_questions (one-action escalations), changes
+        (unchanged/absent/missing/returned/new/drifted/re_addressed),
+        freshness, assumptions, summary.
+      properties:
+        id: { type: string }
+        pass: { type: object }
+        spec_model: { type: object }
+        mappings: { type: array, items: { type: object } }
+        entities: { type: array, items: { $ref: "#/components/schemas/Entity" } }
+        ladder_results: { type: array, items: { type: object } }
+        deviations: { type: array, items: { $ref: "#/components/schemas/Deviation" } }
+        faults: { type: array, items: { type: object } }
+        accepted_risks: { type: object }
+        field_list: { type: array, items: { type: object } }
+        unresolved_questions: { type: array, items: { type: object } }
+        changes: { type: object }
+        freshness: { type: object }
+        assumptions: { type: array, items: { type: string } }
+        summary: { type: object }
