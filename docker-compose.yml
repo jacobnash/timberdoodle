@@ -82,6 +82,10 @@ services:
     image: jaegertracing/all-in-one:latest
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      # Default in-memory storage has no cap (0 = unlimited) - left running
+      # for days this grows without bound; it hit 26GB (85% of nash-srv's
+      # RAM, on a box shared with other projects) before this was set.
+      MEMORY_MAX_TRACES: "50000"
     ports:
       - "16686:16686" # UI
       - "4318:4318" # OTLP HTTP
